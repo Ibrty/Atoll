@@ -8496,9 +8496,6 @@
         }
       }
     },
-    "Full" : {
-      "comment" : "Full battery level label"
-    },
     "Fully charged" : {
       "comment" : "Charging fallback label when already charged"
     },

@@ -4,13 +4,12 @@
 //
 //  Created by Richard Kunkli on 07/08/2024.
 //
-
-import AVFoundation
 import Defaults
 import EventKit
 import KeyboardShortcuts
 import LaunchAtLogin
 import LottieUI
+import AVFoundation
 import Sparkle
 import SwiftUI
 import SwiftUIIntrospect
@@ -347,6 +346,7 @@ struct GeneralSettings: View {
                     }
                     .pickerStyle(.segmented)
                     Defaults.Toggle("Show location label", key: .lockScreenWeatherShowsLocation)
+                        .disabled(lockScreenWeatherWidgetStyle == .circular)
                     Defaults.Toggle("Show charging status", key: .lockScreenWeatherShowsCharging)
                     if lockScreenWeatherShowsCharging {
                         Defaults.Toggle("Show charging percentage", key: .lockScreenWeatherShowsChargingPercentage)
@@ -662,9 +662,6 @@ struct HUD: View {
             
             Section {
                 Toggle("Enable Built-in System HUD", isOn: $enableSystemHUD)
-                    .onChange(of: enableSystemHUD) { _ in
-                        // SystemHUDManager will automatically handle start/stop via its @Default observer
-                    }
                 
                 if enableSystemHUD {
                     Toggle("Volume HUD", isOn: $enableVolumeHUD)
@@ -1943,34 +1940,34 @@ struct TimerSettings: View {
         let nextIndex = timerPresets.count + 1
         let defaultColor = Defaults[.accentColor]
         let newPreset = TimerPreset(name: "Preset \(nextIndex)", duration: 5 * 60, color: defaultColor)
-        withAnimation(.smooth) {
+        _ = withAnimation(.smooth) {
             timerPresets.append(newPreset)
         }
     }
     
     private func movePresetUp(_ index: Int) {
         guard index > timerPresets.startIndex else { return }
-        withAnimation(.smooth) {
+        _ = withAnimation(.smooth) {
             timerPresets.swapAt(index, index - 1)
         }
     }
     
     private func movePresetDown(_ index: Int) {
         guard index < timerPresets.index(before: timerPresets.endIndex) else { return }
-        withAnimation(.smooth) {
+        _ = withAnimation(.smooth) {
             timerPresets.swapAt(index, index + 1)
         }
     }
     
     private func removePreset(_ index: Int) {
         guard timerPresets.indices.contains(index) else { return }
-        withAnimation(.smooth) {
+        _ = withAnimation(.smooth) {
             timerPresets.remove(at: index)
         }
     }
     
     private func resetPresets() {
-        withAnimation(.smooth) {
+        _ = withAnimation(.smooth) {
             timerPresets = TimerPreset.defaultPresets
         }
     }

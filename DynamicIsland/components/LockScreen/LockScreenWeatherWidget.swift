@@ -13,6 +13,8 @@ struct LockScreenWeatherWidget: View {
 	private var stackSpacing: CGFloat { isInline ? 14 : 22 }
 	private var gaugeLineWidth: CGFloat { 6 }
 	private var gaugeDiameter: CGFloat { 64 }
+	private var topPadding: CGFloat { isInline ? 6 : 22 }
+	private var bottomPadding: CGFloat { isInline ? 6 : 10 }
 
 	private var gaugeBackgroundColor: Color {
 		snapshot.usesGaugeTint ? Color.white.opacity(0.22) : Color.white.opacity(0.32)
@@ -45,7 +47,8 @@ struct LockScreenWeatherWidget: View {
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.foregroundStyle(Color.white.opacity(0.65))
 		.padding(.horizontal, 10)
-		.padding(.vertical, 6)
+		.padding(.top, topPadding)
+		.padding(.bottom, bottomPadding)
 		.background(Color.clear)
 		.shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
 		.accessibilityElement(children: .ignore)
@@ -143,7 +146,7 @@ struct LockScreenWeatherWidget: View {
 			Image(systemName: info.iconName)
 				.font(.system(size: 20, weight: .semibold))
 				.symbolRenderingMode(.hierarchical)
-			Text(bluetoothStatusLabel(for: info.batteryLevel))
+			Text(bluetoothPercentageText(for: info.batteryLevel))
 				.font(inlinePrimaryFont)
 				.lineLimit(1)
 				.minimumScaleFactor(0.85)
@@ -159,7 +162,7 @@ struct LockScreenWeatherWidget: View {
 					.font(.system(size: 22, weight: .semibold))
 					.foregroundStyle(Color.white)
 			}
-			Text(bluetoothStatusLabel(for: info.batteryLevel))
+			Text(bluetoothPercentageText(for: info.batteryLevel))
 				.font(inlineSecondaryFont)
 				.foregroundStyle(secondaryLabelColor)
 		}
@@ -285,18 +288,8 @@ struct LockScreenWeatherWidget: View {
 		return NSLocalizedString("Charging", comment: "Charging fallback label when no estimate is available")
 	}
 
-	private func bluetoothStatusLabel(for level: Int) -> String {
-		let value = clampedBatteryLevel(level)
-		switch value {
-		case ..<20:
-			return NSLocalizedString("Low", comment: "Low battery level label")
-		case 20..<50:
-			return NSLocalizedString("Medium", comment: "Medium battery level label")
-		case 50..<80:
-			return NSLocalizedString("High", comment: "High battery level label")
-		default:
-			return NSLocalizedString("Full", comment: "Full battery level label")
-		}
+	private func bluetoothPercentageText(for level: Int) -> String {
+		"\(clampedBatteryLevel(level))%"
 	}
 
 	private func minimumTemperatureLabel(for info: LockScreenWeatherSnapshot.TemperatureInfo) -> String {
@@ -362,25 +355,27 @@ struct LockScreenWeatherWidget: View {
 
 	private func batteryTint(for level: Int) -> Color {
 		guard snapshot.usesGaugeTint else { return monochromeGaugeTint }
-		switch level {
+		let clamped = clampedBatteryLevel(level)
+		switch clamped {
 		case ..<20:
-			return Color(red: 0.91, green: 0.29, blue: 0.25)
+			return Color(.systemRed)
 		case 20..<50:
-			return Color(red: 0.99, green: 0.74, blue: 0.30)
+			return Color(.systemOrange)
 		default:
-			return Color(red: 0.20, green: 0.79, blue: 0.39)
+			return Color(.systemGreen)
 		}
 	}
 
 	private func bluetoothTint(for level: Int) -> Color {
 		guard snapshot.usesGaugeTint else { return monochromeGaugeTint }
-		switch level {
+		let clamped = clampedBatteryLevel(level)
+		switch clamped {
 		case ..<20:
-			return Color(red: 0.91, green: 0.29, blue: 0.25)
+			return Color(.systemRed)
 		case 20..<50:
-			return Color(red: 0.97, green: 0.58, blue: 0.29)
+			return Color(.systemOrange)
 		default:
-			return Color(red: 0.29, green: 0.63, blue: 1.00)
+			return Color(.systemGreen)
 		}
 	}
 

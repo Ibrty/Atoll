@@ -17,6 +17,11 @@ final class LockScreenWeatherManager: ObservableObject {
 
     private init() {
         observeAccessoryChanges()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.locationProvider.prepareAuthorization()
+            _ = await self.refresh(force: true)
+        }
     }
 
     func prepareLocationAccess() {
@@ -73,7 +78,7 @@ final class LockScreenWeatherManager: ObservableObject {
 
         do {
             let location = await locationProvider.currentLocation()
-            let payload = try await provider.fetchSnapshot(location: location)
+            let payload = try await fetchWeatherPayload(location: location)
             latestWeatherPayload = payload
             if Defaults[.lockScreenWeatherShowsBluetooth] {
                 BluetoothAudioManager.shared.refreshConnectedDeviceBatteries()
@@ -105,6 +110,25 @@ final class LockScreenWeatherManager: ObservableObject {
             self.snapshot = fallback
             deliver(fallback, forceShow: false)
             return fallback
+        }
+    }
+
+    private func fetchWeatherPayload(location: CLLocation?) async throws -> LockScreenWeatherSnapshot {
+        let primarySource = Defaults[.lockScreenWeatherProviderSource]
+
+        do {
+            return try await provider.fetchSnapshot(location: location, source: primarySource)
+        } catch {
+            if primarySource == .openMeteo {
+                NSLog("LockScreenWeatherManager: Open Meteo fetch failed - %@. Falling back to wttr.in", error.localizedDescription)
+                do {
+                    return try await provider.fetchSnapshot(location: location, source: .wttr)
+                } catch {
+                    NSLog("LockScreenWeatherManager: wttr.in fallback also failed - %@", error.localizedDescription)
+                    throw error
+                }
+            }
+            throw error
         }
     }
 
@@ -198,11 +222,11 @@ final class LockScreenWeatherManager: ObservableObject {
     }
 
     private func makeSnapshot(from payload: LockScreenWeatherSnapshot) -> LockScreenWeatherSnapshot {
-        let locationName = payload.locationName
-        let shouldShowLocation = Defaults[.lockScreenWeatherShowsLocation] && !(locationName?.isEmpty ?? true)
+    let locationName = payload.locationName
         let chargingInfo = Defaults[.lockScreenWeatherShowsCharging] ? makeChargingInfo() : nil
         let bluetoothInfo = Defaults[.lockScreenWeatherShowsBluetooth] ? makeBluetoothInfo() : nil
         let widgetStyle = Defaults[.lockScreenWeatherWidgetStyle]
+    let shouldShowLocation = widgetStyle == .inline && Defaults[.lockScreenWeatherShowsLocation] && !(locationName?.isEmpty ?? true)
         let showsChargingPercentage = Defaults[.lockScreenWeatherShowsChargingPercentage]
         let providerSource = Defaults[.lockScreenWeatherProviderSource]
         let airQualityInfo = (Defaults[.lockScreenWeatherShowsAQI] && providerSource.supportsAirQuality) ? payload.airQuality : nil
@@ -406,6 +430,10 @@ private actor LockScreenWeatherProvider {
 
     func fetchSnapshot(location: CLLocation?) async throws -> LockScreenWeatherSnapshot {
         let source = Defaults[.lockScreenWeatherProviderSource]
+        return try await fetchSnapshot(location: location, source: source)
+    }
+
+    func fetchSnapshot(location: CLLocation?, source: LockScreenWeatherProviderSource) async throws -> LockScreenWeatherSnapshot {
         switch source {
         case .wttr:
             return try await fetchWttrSnapshot(location: location)
