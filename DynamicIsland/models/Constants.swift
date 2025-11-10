@@ -217,6 +217,22 @@ enum TimerProgressStyle: String, CaseIterable, Identifiable, Defaults.Serializab
     var id: String { rawValue }
 }
 
+enum ReminderPresentationStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case ringCountdown = "Ring"
+    case digital = "Digital"
+    case minutes = "Minutes"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .ringCountdown: return "Ring"
+        case .digital: return "Digital"
+        case .minutes: return "Minutes"
+        }
+    }
+}
+
 // AI Model types for screen assistant
 enum AIModelProvider: String, CaseIterable, Identifiable, Defaults.Serializable {
     case gemini = "Gemini"
@@ -359,6 +375,7 @@ extension Defaults.Keys {
     // Enable lock screen media widget (shows the standalone panel when screen is locked)
     static let enableLockScreenMediaWidget = Key<Bool>("enableLockScreenMediaWidget", default: true)
     static let enableLockScreenWeatherWidget = Key<Bool>("enableLockScreenWeatherWidget", default: true)
+    static let enableLockScreenReminderWidget = Key<Bool>("enableLockScreenReminderWidget", default: true)
     static let lockScreenWeatherRefreshInterval = Key<TimeInterval>("lockScreenWeatherRefreshInterval", default: 30 * 60)
     static let lockScreenWeatherShowsLocation = Key<Bool>("lockScreenWeatherShowsLocation", default: true)
     static let lockScreenWeatherShowsCharging = Key<Bool>("lockScreenWeatherShowsCharging", default: true)
@@ -374,6 +391,7 @@ extension Defaults.Keys {
     static let lockScreenShowAppIcon = Key<Bool>("lockScreenShowAppIcon", default: false)
     static let lockScreenPanelShowsBorder = Key<Bool>("lockScreenPanelShowsBorder", default: true)
     static let lockScreenPanelUsesBlur = Key<Bool>("lockScreenPanelUsesBlur", default: true)
+    static let lockScreenReminderChipStyle = Key<LockScreenReminderChipStyle>("lockScreenReminderChipStyle", default: .eventColor)
     
         // MARK: Battery
     static let showPowerStatusNotifications = Key<Bool>("showPowerStatusNotifications", default: true)
@@ -442,6 +460,12 @@ extension Defaults.Keys {
     static let timerShowsLabel = Key<Bool>("timerShowsLabel", default: true)
     static let timerShowsProgress = Key<Bool>("timerShowsProgress", default: true)
     static let timerProgressStyle = Key<TimerProgressStyle>("timerProgressStyle", default: .bar)
+    
+    // MARK: Reminder Live Activity
+    static let enableReminderLiveActivity = Key<Bool>("enableReminderLiveActivity", default: true)
+    static let reminderPresentationStyle = Key<ReminderPresentationStyle>("reminderPresentationStyle", default: .ringCountdown)
+    static let reminderLeadTime = Key<Int>("reminderLeadTime", default: 5)
+    static let reminderSneakPeekDuration = Key<Double>("reminderSneakPeekDuration", default: 10)
     static let timerControlWindowEnabled = Key<Bool>("timerControlWindowEnabled", default: true)
     
     // MARK: ColorPicker Feature

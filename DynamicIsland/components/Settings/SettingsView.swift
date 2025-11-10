@@ -953,6 +953,12 @@ struct Media: View {
 struct CalendarSettings: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     @Default(.showCalendar) var showCalendar: Bool
+    @Default(.enableReminderLiveActivity) var enableReminderLiveActivity
+    @Default(.reminderPresentationStyle) var reminderPresentationStyle
+    @Default(.reminderLeadTime) var reminderLeadTime
+    @Default(.reminderSneakPeekDuration) var reminderSneakPeekDuration
+    @Default(.enableLockScreenReminderWidget) var enableLockScreenReminderWidget
+    @Default(.lockScreenReminderChipStyle) var lockScreenReminderChipStyle
 
     var body: some View {
         Form {
@@ -997,6 +1003,59 @@ struct CalendarSettings: View {
                 
                 Defaults.Toggle("Show calendar", key: .showCalendar)
                 
+                Section(header: Text("Reminder Live Activity")) {
+                    Defaults.Toggle("Enable reminder live activity", key: .enableReminderLiveActivity)
+
+                    Picker("Countdown style", selection: $reminderPresentationStyle) {
+                        ForEach(ReminderPresentationStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!enableReminderLiveActivity)
+
+                    HStack {
+                        Text("Notify before")
+                        Slider(
+                            value: Binding(
+                                get: { Double(reminderLeadTime) },
+                                set: { reminderLeadTime = Int($0) }
+                            ),
+                            in: 1...60,
+                            step: 1
+                        )
+                        .disabled(!enableReminderLiveActivity)
+                        Text("\(reminderLeadTime) min")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 60, alignment: .trailing)
+                    }
+
+                    HStack {
+                        Text("Sneak peek duration")
+                        Slider(
+                            value: $reminderSneakPeekDuration,
+                            in: 3...20,
+                            step: 1
+                        )
+                        .disabled(!enableReminderLiveActivity)
+                        Text("\(Int(reminderSneakPeekDuration)) s")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 60, alignment: .trailing)
+                    }
+                }
+
+                Section(header: Text("Lock Screen Reminder Widget")) {
+                    Defaults.Toggle("Show lock screen reminder", key: .enableLockScreenReminderWidget)
+
+                    Picker("Chip color", selection: $lockScreenReminderChipStyle) {
+                        ForEach(LockScreenReminderChipStyle.allCases) { style in
+                            Text(style.rawValue).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!enableLockScreenReminderWidget || !enableReminderLiveActivity)
+                }
+
                 Section(header: Text("Select Calendars")) {
                     List {
                         ForEach(calendarManager.allCalendars, id: \.id) { calendar in

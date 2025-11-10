@@ -19,6 +19,7 @@ enum SneakContentType {
     case battery
     case download
     case timer
+    case reminder
     case recording
     case doNotDisturb
     case bluetoothAudio
@@ -143,8 +144,17 @@ class DynamicIslandViewCoordinator: ObservableObject {
     }
     
     func toggleSneakPeek(status: Bool, type: SneakContentType, duration: TimeInterval = 1.5, value: CGFloat = 0, icon: String = "") {
-        sneakPeekDuration = duration
-        if type != .music && type != .timer {
+        let resolvedDuration: TimeInterval
+        switch type {
+        case .timer:
+            resolvedDuration = 10
+        case .reminder:
+            resolvedDuration = Defaults[.reminderSneakPeekDuration]
+        default:
+            resolvedDuration = duration
+        }
+        sneakPeekDuration = resolvedDuration
+        if type != .music && type != .timer && type != .reminder {
             // close()
             if !hudReplacement {
                 return
