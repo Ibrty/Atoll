@@ -2260,6 +2260,8 @@ private struct TimerPresetComponentControl: View {
 struct StatsSettings: View {
     @ObservedObject var statsManager = StatsManager.shared
     @Default(.enableStatsFeature) var enableStatsFeature
+    @Default(.statsStopWhenNotchCloses) var statsStopWhenNotchCloses
+    @Default(.statsUpdateInterval) var statsUpdateInterval
     @Default(.showCpuGraph) var showCpuGraph
     @Default(.showMemoryGraph) var showMemoryGraph
     @Default(.showGpuGraph) var showGpuGraph
@@ -2269,6 +2271,21 @@ struct StatsSettings: View {
     
     var enabledGraphsCount: Int {
         [showCpuGraph, showMemoryGraph, showGpuGraph, showNetworkGraph, showDiskGraph].filter { $0 }.count
+    }
+
+    private var formattedUpdateInterval: String {
+        let seconds = Int(statsUpdateInterval.rounded())
+        if seconds >= 60 {
+            return "60 s (1 min)"
+        } else if seconds == 1 {
+            return "1 s"
+        } else {
+            return "\(seconds) s"
+        }
+    }
+
+    private var shouldShowStatsBatteryWarning: Bool {
+        !statsStopWhenNotchCloses && statsUpdateInterval <= 5
     }
     
     var body: some View {
@@ -2302,6 +2319,45 @@ struct StatsSettings: View {
             }
             
             if enableStatsFeature {
+                Section {
+                    Defaults.Toggle("Stop monitoring after closing the notch", key: .statsStopWhenNotchCloses)
+                        .help("When enabled, stats monitoring stops a few seconds after the notch closes.")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Update interval")
+                            Spacer()
+                            Text(formattedUpdateInterval)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Slider(value: $statsUpdateInterval, in: 1...60, step: 1)
+                            .accessibilityLabel("Stats update interval")
+
+                        Text("Controls how often system metrics refresh while monitoring is active.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if shouldShowStatsBatteryWarning {
+                        Label {
+                            Text("High-frequency updates without a timeout can increase battery usage.")
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.top, 4)
+                    }
+                } header: {
+                    Text("Monitoring Behavior")
+                } footer: {
+                    Text("Sampling can continue while the notch is closed when the timeout is disabled.")
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+
                 Section {
                     Defaults.Toggle("CPU Usage", key: .showCpuGraph)
                     Defaults.Toggle("Memory Usage", key: .showMemoryGraph) 

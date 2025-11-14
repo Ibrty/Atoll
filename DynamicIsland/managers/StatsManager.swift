@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import Defaults
 import SwiftUI
 import IOKit
 import IOKit.ps
@@ -442,6 +443,11 @@ class StatsManager: ObservableObject {
     private var isProcessRefreshInFlight = false
     private let gpuCollector = GPUInfoCollector()
     private let cpuSensorCollector = CPUSensorCollector()
+    private var cancellables = Set<AnyCancellable>()
+    private let minUpdateInterval: TimeInterval = 1.0
+    private let maxUpdateInterval: TimeInterval = 60.0
+    private let notchCloseStopDelay: TimeInterval = 3.0
+    private let tabSwitchStopDelay: TimeInterval = 0.1
     
     // MARK: - Initialization
     private init() {
@@ -462,6 +468,23 @@ class StatsManager: ObservableObject {
         // Initialize baseline disk stats
         let initialDiskStats = getDiskStats()
         previousDiskStats = initialDiskStats
+
+        Defaults.publisher(.statsUpdateInterval, options: []).sink { [weak self] change in
+            self?.handleUpdateIntervalChange(change.newValue)
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.statsStopWhenNotchCloses, options: []).sink { [weak self] change in
+            guard let self else { return }
+
+            if change.newValue {
+                if self.isMonitoring && self.lastNotchState == "closed" {
+                    self.scheduleDelayedStop(after: self.notchCloseStopDelay)
+                }
+            } else {
+                self.delayedStopTimer?.invalidate()
+                self.delayedStopTimer = nil
+            }
+        }.store(in: &cancellables)
     }
     
     deinit {
@@ -495,12 +518,14 @@ class StatsManager: ObservableObject {
                 }
             }
         } else {
-            // Stop monitoring after 3 seconds (when notch is closed or stats tab is not active)
-            let delay = notchIsOpen ? 0.1 : 3.0 // Stop quickly when switching tabs, slowly when closing notch
-            delayedStopTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.stopMonitoring()
+            if notchIsOpen && currentView != "stats" {
+                scheduleDelayedStop(after: tabSwitchStopDelay)
+            } else if !notchIsOpen {
+                if Defaults[.statsStopWhenNotchCloses] {
+                    scheduleDelayedStop(after: notchCloseStopDelay)
                 }
+            } else {
+                scheduleDelayedStop(after: tabSwitchStopDelay)
             }
         }
     }
@@ -525,13 +550,10 @@ class StatsManager: ObservableObject {
         networkTotals = .zero
         diskTotals = .zero
         
-        // Start periodic monitoring (every 1 second)
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            
-            Task { @MainActor in
-                self.updateSystemStats()
-            }
+        scheduleMonitoringTimer()
+
+        Task { @MainActor in
+            self.updateSystemStats()
         }
         
         print("StatsManager: Monitoring started")
@@ -567,6 +589,59 @@ class StatsManager: ObservableObject {
         interfaceTotals.removeAll()
         cpuTemperature = CPUTemperatureMetrics(celsius: nil)
         cpuFrequency = nil
+    }
+
+    private func scheduleMonitoringTimer() {
+        monitoringTimer?.invalidate()
+
+        let configuredInterval = Defaults[.statsUpdateInterval]
+        let interval = validatedUpdateInterval(configuredInterval)
+
+        if abs(interval - configuredInterval) > 0.0001 {
+            Defaults[.statsUpdateInterval] = interval
+        }
+
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+
+            Task { @MainActor in
+                self.updateSystemStats()
+            }
+        }
+    }
+
+    private func handleUpdateIntervalChange(_ newValue: Double) {
+        let interval = validatedUpdateInterval(newValue)
+
+        if abs(interval - newValue) > 0.0001 {
+            Defaults[.statsUpdateInterval] = interval
+            return
+        }
+
+        guard isMonitoring else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.scheduleMonitoringTimer()
+        }
+    }
+
+    private func validatedUpdateInterval(_ value: Double) -> TimeInterval {
+        min(max(value, minUpdateInterval), maxUpdateInterval)
+    }
+
+    private func scheduleDelayedStop(after delay: TimeInterval) {
+        guard delay > 0 else {
+            stopMonitoring()
+            return
+        }
+
+        delayedStopTimer?.invalidate()
+
+        delayedStopTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.stopMonitoring()
+            }
+        }
     }
     
     // MARK: - Private Methods
