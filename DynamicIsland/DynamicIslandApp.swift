@@ -615,17 +615,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         KeyboardShortcuts.isEnabled = Defaults[.enableShortcuts]
 
-        _ = KeyboardShortcuts.onKeyDown(for: .statsPanel) {
-            guard Defaults[.enableShortcuts] else { return }
-            guard Defaults[.enableStatsFeature] && Defaults[.showStatsPanel] else { return }
-
-            if !StatsManager.shared.isMonitoring {
-                StatsManager.shared.startMonitoring()
-            }
-
-            StatsPanelManager.shared.toggleStatsPanel()
-        }
-        
         if !Defaults[.showOnAllDisplays] {
             let viewModel = self.vm
             let window = createDynamicIslandWindow(
