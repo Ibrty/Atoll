@@ -43,7 +43,6 @@ final class ReminderLiveActivityManager: ObservableObject {
         case eventStoreChange
         case calendarListChange
         case calendarEventsUpdate
-        case fallback
         case evaluation
         case hover
         case ticker
@@ -54,7 +53,6 @@ final class ReminderLiveActivityManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var tickerTask: Task<Void, Never>? { didSet { oldValue?.cancel() } }
     private var evaluationTask: Task<Void, Never>?
-    private var fallbackRefreshTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var pendingRefreshTask: Task<Void, Never>?
     private var pendingRefreshForce = false
@@ -152,8 +150,6 @@ final class ReminderLiveActivityManager: ObservableObject {
         tickerTask = nil
         evaluationTask?.cancel()
         evaluationTask = nil
-        fallbackRefreshTask?.cancel()
-        fallbackRefreshTask = nil
         pendingRefreshTask?.cancel()
         pendingRefreshTask = nil
         pendingRefreshForce = false
@@ -227,22 +223,6 @@ final class ReminderLiveActivityManager: ObservableObject {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             await self.evaluateCurrentState(at: Date())
-        }
-    }
-
-    private func scheduleFallbackRefresh() {
-        fallbackRefreshTask?.cancel()
-        let delay: TimeInterval = 15 * 60
-        logger.debug("[Reminder] Scheduling fallback refresh in \(delay, format: .fixed(precision: 0))s")
-        fallbackRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            } catch {
-                self.logger.debug("[Reminder] Cancelled pending fallback refresh before execution")
-                return
-            }
-            await self.scheduleRefresh(force: true, reason: .fallback)
         }
     }
 
@@ -348,7 +328,6 @@ final class ReminderLiveActivityManager: ObservableObject {
     }
 
     private func handleEntrySelection(_ entry: ReminderEntry?, referenceDate: Date) {
-        fallbackRefreshTask?.cancel()
         nextReminder = entry
         hasShownCriticalSneakPeek = false
         Task { await self.evaluateCurrentState(at: referenceDate) }
@@ -368,8 +347,7 @@ final class ReminderLiveActivityManager: ObservableObject {
 
         guard let first = upcoming.first else {
             deactivateReminder()
-            logger.debug("[Reminder] No upcoming reminders found; scheduling fallback refresh")
-            scheduleFallbackRefresh()
+            logger.debug("[Reminder] No upcoming reminders found; awaiting next calendar update")
             return
         }
 
@@ -468,9 +446,6 @@ final class ReminderLiveActivityManager: ObservableObject {
             }
             stopTicker()
             hasShownCriticalSneakPeek = false
-            if fallbackRefreshTask == nil {
-                scheduleFallbackRefresh()
-            }
             return
         }
 
