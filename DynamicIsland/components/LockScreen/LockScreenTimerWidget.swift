@@ -132,8 +132,6 @@ struct LockScreenTimerWidget: View {
         .overlay(alignment: .topLeading) {
             accentRibbon
         }
-        .animation(.smooth(duration: 0.22), value: timerManager.isPaused)
-        .animation(.smooth(duration: 0.22), value: timerManager.remainingTime)
         .scaleEffect(animator.isPresented ? 1 : 0.9)
         .opacity(animator.isPresented ? 1 : 0)
         .animation(.spring(response: 0.45, dampingFraction: 0.85, blendDuration: 0.22), value: animator.isPresented)
@@ -222,6 +220,7 @@ struct LockScreenTimerWidget: View {
             return
         }
         timerManager.stopTimer()
+        LockScreenTimerWidgetPanelManager.shared.hide()
     }
 
     private struct CircleButton: View {
