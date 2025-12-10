@@ -3325,6 +3325,18 @@ func customBadge(text: String) -> some View {
         .clipShape(.capsule)
 }
 
+func alphaBadge() -> some View {
+    Text("ALPHA")
+        .font(.system(size: 10, weight: .bold))
+        .foregroundStyle(Color.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill(Color.orange.opacity(0.9))
+        )
+}
+
 func warningBadge(_ text: String, _ description: String) -> some View {
     Section {
         HStack(spacing: 12) {
@@ -3389,7 +3401,12 @@ struct TimerSettings: View {
             if enableTimerFeature {
                 Toggle("Enable timer live activity", isOn: $coordinator.timerLiveActivityEnabled)
                     .animation(.easeInOut, value: coordinator.timerLiveActivityEnabled)
-                Defaults.Toggle("Mirror macOS Clock timers", key: .mirrorSystemTimer)
+                Defaults.Toggle(key: .mirrorSystemTimer) {
+                    HStack(spacing: 8) {
+                        Text("Mirror macOS Clock timers")
+                        alphaBadge()
+                    }
+                }
                     .help("Shows the system Clock timer in the notch when available. Requires Accessibility permission to read the status item.")
                     .settingsHighlight(id: highlightID("Mirror macOS Clock timers"))
 
