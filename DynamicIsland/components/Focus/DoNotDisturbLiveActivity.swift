@@ -24,6 +24,11 @@ struct DoNotDisturbLiveActivity: View {
     @State private var cleanupTask: Task<Void, Never>?
     @State private var labelIntrinsicWidth: CGFloat = 0
 
+    private enum ToastTiming {
+        static let activeDisplay: UInt64 = 1800  // focus enabled toast linger
+        static let inactiveDisplay: UInt64 = 1500  // focus disabled toast linger
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             iconWing
@@ -331,7 +336,7 @@ struct DoNotDisturbLiveActivity: View {
 
         collapseTask?.cancel()
         collapseTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(focusToastMode ? 900 : 320))
+            try? await Task.sleep(for: .milliseconds(focusToastMode ? ToastTiming.inactiveDisplay : 320))
             withAnimation(.smooth(duration: 0.32)) {
                 isExpanded = false
                 if focusToastMode {
@@ -355,7 +360,7 @@ struct DoNotDisturbLiveActivity: View {
         cleanupTask?.cancel()
 
         collapseTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1150))
+            try? await Task.sleep(for: .milliseconds(ToastTiming.activeDisplay))
             withAnimation(.smooth(duration: 0.32)) {
                 isExpanded = false
                 showInactiveIcon = false
