@@ -80,13 +80,17 @@ struct MusicSlotConfigurationView: View {
 
     private var palette: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Control Palette")
-                .font(.headline)
+            HStack(spacing: 8) {
+                Text("Control Palette")
+                    .font(.headline)
+                Spacer()
+                ScrollHintIndicator()
+            }
             Text("Drag a control onto a slot or tap to place it in the first empty slot.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ScrollView(.horizontal, showsIndicators: true) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(pickerOptions, id: \.self) { control in
                         paletteItem(for: control)
@@ -96,6 +100,21 @@ struct MusicSlotConfigurationView: View {
             }
         }
     }
+
+private struct ScrollHintIndicator: View {
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "chevron.left")
+            Text("Scroll")
+            Image(systemName: "chevron.right")
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.08), in: Capsule())
+    }
+}
 
     private var resetButton: some View {
         HStack {
