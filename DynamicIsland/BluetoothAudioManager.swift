@@ -51,6 +51,7 @@ class BluetoothAudioManager: ObservableObject {
     fileprivate struct AirPodsSides: Equatable {
         var left: Int?
         var right: Int?
+        var caseLevel: Int?
         var leftConnected: Bool?
         var rightConnected: Bool?
     }
@@ -891,13 +892,16 @@ class BluetoothAudioManager: ObservableObject {
 
         for (key, value) in source {
             guard !key.isEmpty else { continue }
-            var current = target[key] ?? AirPodsSides(left: nil, right: nil, leftConnected: nil, rightConnected: nil)
+            var current = target[key] ?? AirPodsSides(left: nil, right: nil, caseLevel: nil, leftConnected: nil, rightConnected: nil)
 
             if let left = value.left {
                 current.left = max(current.left ?? left, left)
             }
             if let right = value.right {
                 current.right = max(current.right ?? right, right)
+            }
+            if let caseLevel = value.caseLevel {
+                current.caseLevel = max(current.caseLevel ?? caseLevel, caseLevel)
             }
             if let lc = value.leftConnected {
                 current.leftConnected = current.leftConnected ?? lc
@@ -926,6 +930,7 @@ class BluetoothAudioManager: ObservableObject {
                         result[normalizedName] = AirPodsSides(
                             left: sides.left.map(clampBatteryPercentage),
                             right: sides.right.map(clampBatteryPercentage),
+                            caseLevel: sides.caseLevel.map(clampBatteryPercentage),
                             leftConnected: sides.leftConnected,
                             rightConnected: sides.rightConnected
                         )
@@ -956,6 +961,7 @@ class BluetoothAudioManager: ObservableObject {
                 result[normalizedName] = AirPodsSides(
                     left: sides.left.map(clampBatteryPercentage),
                     right: sides.right.map(clampBatteryPercentage),
+                    caseLevel: sides.caseLevel.map(clampBatteryPercentage),
                     leftConnected: sides.leftConnected,
                     rightConnected: sides.rightConnected
                 )
@@ -986,6 +992,25 @@ class BluetoothAudioManager: ObservableObject {
             "BatteryLevelRight",
             "BatteryRight"
         ]
+        
+        let caseKeys = [
+            "BatteryPercentCase",
+            "device_batteryLevelCase",
+            "device_batteryPercentCase",
+            "Case Battery Level",
+            "CaseBatteryLevel",
+            "BatteryLevelCase",
+            "BatteryCase",
+            "CaseBattery",
+            // extra variants
+            "BatteryPercentChargeCase",
+            "ChargeCaseBattery",
+            "ChargeCaseBatteryLevel",
+            "Charging Case Battery Level",
+            "ChargingCaseBatteryLevel",
+            "chargingCaseBatteryLevel",
+            "charging_case_battery_level"
+        ]
 
         func firstValue(in keys: [String]) -> Int? {
             for key in keys {
@@ -999,9 +1024,10 @@ class BluetoothAudioManager: ObservableObject {
         // 1) Primary lookup using known keys
         var left = firstValue(in: leftKeys)
         var right = firstValue(in: rightKeys)
+        var caseLevel = firstValue(in: caseKeys)
 
         // 2) Fallback: scan every key/value in the payload for anything that looks like left/right battery.
-        if left == nil || right == nil {
+        if left == nil || right == nil || caseLevel == nil {
             for (key, raw) in payload {
                 let k = key.lowercased()
 
@@ -1021,13 +1047,25 @@ class BluetoothAudioManager: ObservableObject {
                         right = converted
                     }
                 }
+                
+                if caseLevel == nil, (k.contains("case") || k.contains("chargingcase") || k.contains("chargecase")) {
+                    if let converted = convertToBatteryPercentage(raw) {
+                        caseLevel = converted
+                    }
+                }
 
-                if left != nil && right != nil { break }
+                if left != nil && right != nil && caseLevel != nil { break }
             }
         }
 
         let connections = extractAirPodsConnections(from: payload)
-        return AirPodsSides(left: left, right: right, leftConnected: connections.left, rightConnected: connections.right)
+        return AirPodsSides(
+            left: left,
+            right: right,
+            caseLevel: caseLevel,
+            leftConnected: connections.left,
+            rightConnected: connections.right
+        )
     }
 
     // Helper to extract per-side connected flags for AirPods
@@ -1666,6 +1704,17 @@ class BluetoothAudioManager: ObservableObject {
         let threshold = 5
         var output: [WidgetBluetoothDevice] = []
 
+        let appendCaseIfAvailable: (_ device: BluetoothAudioDevice, _ caseLevel: Int?) -> Void = { device, caseLevel in
+            guard Defaults[.lockScreenShowAirPodsCaseBattery] else { return }
+            guard let caseLevel else { return }
+            output.append(
+                WidgetBluetoothDevice(
+                    id: device.address + "-C",
+                    symbolName: device.deviceType.caseSymbol(),
+                    batteryLevel: caseLevel
+                )
+            )
+        }
         for device in connectedDevices {
             // Only split earbud AirPods pairs (AirPods / AirPods Pro). Keep others as-is.
             guard device.deviceType.isEarbudAirPodsPair else {
@@ -1696,18 +1745,20 @@ class BluetoothAudioManager: ObservableObject {
             let right = sides?.right
             let leftConnected = sides?.leftConnected
             let rightConnected = sides?.rightConnected
+            let caseLevel = sides?.caseLevel
             
-            print("[Atoll][AirPods] name=\(device.name) normalized=\(key) left=\(String(describing: left)) right=\(String(describing: right)) cacheKeys=\(Array(airPodsSidesByName.keys))")
+            print("[Atoll][AirPods] name=\(device.name) normalized=\(key) left=\(String(describing: left)) right=\(String(describing: right)) case=\(String(describing: caseLevel)) cacheKeys=\(Array(airPodsSidesByName.keys))")
 
             // If we have no per-side info, keep current behavior.
             guard left != nil || right != nil else {
                 output.append(
                     WidgetBluetoothDevice(
                         id: device.address,
-                        symbolName: device.deviceType.sfSymbol,
+                        symbolName: device.deviceType.pairSymbol(),
                         batteryLevel: device.batteryLevel
                     )
                 )
+                appendCaseIfAvailable(device, caseLevel)
                 continue
             }
 
@@ -1730,7 +1781,40 @@ class BluetoothAudioManager: ObservableObject {
                         )
                     )
                 }
+                appendCaseIfAvailable(device, caseLevel)
                 continue
+            }
+            
+            // Case-based inference: if the case battery matches exactly one side,
+            // that side is likely in the case → show ONLY the other bud.
+            if let left, let right, let caseLevel {
+                let eps = 2
+                let leftIsCase = abs(left - caseLevel) <= eps
+                let rightIsCase = abs(right - caseLevel) <= eps
+
+                if leftIsCase != rightIsCase {
+                    if leftIsCase {
+                        output.append(
+                            WidgetBluetoothDevice(
+                                id: device.address + "-R",
+                                symbolName: device.deviceType.earbudSymbol(for: .right),
+                                batteryLevel: right
+                            )
+                        )
+                        appendCaseIfAvailable(device, caseLevel)
+                        continue
+                    } else {
+                        output.append(
+                            WidgetBluetoothDevice(
+                                id: device.address + "-L",
+                                symbolName: device.deviceType.earbudSymbol(for: .left),
+                                batteryLevel: left
+                            )
+                        )
+                        appendCaseIfAvailable(device, caseLevel)
+                        continue
+                    }
+                }
             }
 
             // Heuristic fallback (ONLY when it looks like “one bud in case, one bud in ear”):
@@ -1766,6 +1850,7 @@ class BluetoothAudioManager: ObservableObject {
                             )
                         )
                     }
+                    appendCaseIfAvailable(device, caseLevel)
                     continue
                 }
             }
@@ -1779,6 +1864,7 @@ class BluetoothAudioManager: ObservableObject {
                         batteryLevel: left
                     )
                 )
+                appendCaseIfAvailable(device, caseLevel)
                 continue
             }
 
@@ -1790,6 +1876,7 @@ class BluetoothAudioManager: ObservableObject {
                         batteryLevel: right
                     )
                 )
+                appendCaseIfAvailable(device, caseLevel)
                 continue
             }
 
@@ -1806,6 +1893,7 @@ class BluetoothAudioManager: ObservableObject {
                             batteryLevel: device.batteryLevel ?? max(left, right)
                         )
                     )
+                    appendCaseIfAvailable(device, caseLevel)
                     continue
                 }
 
@@ -1824,6 +1912,7 @@ class BluetoothAudioManager: ObservableObject {
                         batteryLevel: right
                     )
                 )
+                appendCaseIfAvailable(device, caseLevel)
                 continue
             }
 
@@ -2295,6 +2384,30 @@ fileprivate extension BluetoothAudioDeviceType {
             candidates = ["airpods.pro", "airpodspro", "airpods"]
         case .airpodsMax:
             candidates = ["airpodsmax", "airpods.max", "headphones"]
+        default:
+            candidates = [sfSymbol]
+        }
+
+        for name in candidates {
+            if NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+                return name
+            }
+        }
+        return sfSymbol
+    }
+    
+    func caseSymbol() -> String {
+        // Exact names you requested (with fallback if symbol missing on this OS)
+        let candidates: [String]
+        switch self {
+        case .airpodsPro:
+            candidates = ["airpods.pro.chargingcase.wireless.fill", "airpods.chargingcase.wireless.fill"]
+        case .airpodsGen3:
+            candidates = ["airpods.gen3.chargingcase.wireless.fill", "airpods.chargingcase.wireless.fill"]
+        case .airpodsGen4:
+            candidates = ["airpods.gen4.chargingcase.wireless.fill", "airpods.chargingcase.wireless.fill"]
+        case .airpods:
+            candidates = ["airpods.chargingcase.wireless.fill"]
         default:
             candidates = [sfSymbol]
         }
