@@ -15,7 +15,7 @@ struct AudioOutputDevice: Identifiable, Equatable {
         }
 
         if normalizedName.contains("macbook") {
-            return "laptopcomputer"
+            return "macbook.gen2"
         }
 
         if normalizedName.contains("headphone") || normalizedName.contains("headset") {

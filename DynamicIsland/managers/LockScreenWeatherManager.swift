@@ -346,7 +346,7 @@ final class LockScreenWeatherManager: ObservableObject {
 
         guard clampedLevel >= 0 else { return nil }
 
-        let usesLaptopSymbol = widgetStyle == .circular && Defaults[.lockScreenWeatherBatteryUsesLaptopSymbol]
+        let usesLaptopSymbol = Defaults[.lockScreenWeatherBatteryUsesLaptopSymbol]
 
         return LockScreenWeatherSnapshot.BatteryInfo(
             batteryLevel: clampedLevel,
@@ -421,7 +421,7 @@ struct LockScreenWeatherSnapshot: Equatable {
                 return "bolt.fill"
             }
             if isPluggedIn {
-                return "powerplug.portrait.fill"
+                return "battery.100percent.bolt"
             }
             return ""
         }
