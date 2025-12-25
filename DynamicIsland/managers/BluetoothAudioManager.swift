@@ -406,7 +406,7 @@ class BluetoothAudioManager: ObservableObject {
             return .beats
         } else if lowercaseName.contains("speaker") || lowercaseName.contains("boombox") {
             return .speaker
-        } else if lowercaseName.contains("headphone") || lowercaseName.contains("headset") || 
+        } else if lowercaseName.contains("headphone") || lowercaseName.contains("headset") ||
                   lowercaseName.contains("buds") || lowercaseName.contains("earbuds") {
             return .headphones
         }
@@ -500,8 +500,8 @@ class BluetoothAudioManager: ObservableObject {
         guard !entries.isEmpty else { return }
 
         var updatedNames = batteryStatusByName
-        let newlyFilled = mergePmsetEntries(entries, into: &updatedNames, logNewEntries: true)
-        guard !newlyFilled.isEmpty else { return }
+        _ = mergePmsetEntries(entries, into: &updatedNames, logNewEntries: true)
+        guard updatedNames != batteryStatusByName else { return }
 
         batteryStatusByName = updatedNames
         applyConnectedDeviceBatteryLevels(triggerPmsetFallback: false)
@@ -700,18 +700,31 @@ class BluetoothAudioManager: ObservableObject {
 
         var newlyFilled: [PmsetAccessoryBatteryEntry] = []
 
+        func upsert(_ key: String, _ level: Int) {
+            guard !key.isEmpty else { return }
+            let prev = names[key]
+            if prev == nil {
+                names[key] = level
+            } else if let prev, level > prev {
+                names[key] = level
+            }
+        }
+
         for entry in entries {
             let clamped = clampBatteryPercentage(entry.level)
-            let previous = names[entry.normalizedName]
 
-            if previous == nil {
-                newlyFilled.append(entry)
-                names[entry.normalizedName] = clamped
-                continue
+            // 1) store full normalized name (current behavior)
+            if names[entry.normalizedName] == nil { newlyFilled.append(entry) }
+            upsert(entry.normalizedName, clamped)
+
+            // 2) ALSO store a “product-only” alias starting at airpods/beats if present
+            if let r = entry.normalizedName.range(of: "beats") {
+                let alias = String(entry.normalizedName[r.lowerBound...]) // e.g. "beatsstudiopro"
+                upsert(alias, clamped)
             }
-
-            if let previous, clamped > previous {
-                names[entry.normalizedName] = clamped
+            if let r = entry.normalizedName.range(of: "airpods") {
+                let alias = String(entry.normalizedName[r.lowerBound...]) // e.g. "airpodspro"
+                upsert(alias, clamped)
             }
         }
 
@@ -986,44 +999,62 @@ class BluetoothAudioManager: ObservableObject {
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        guard process.terminationStatus == 0 else {
-            return []
-        }
+        guard process.terminationStatus == 0 else { return [] }
+        guard !data.isEmpty else { return [] }
 
-        guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
-            return []
-        }
+        // pmset output may not be UTF-8 inside a GUI app; fall back to common encodings
+        let output =
+            String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .macOSRoman)
+            ?? String(data: data, encoding: .isoLatin1)
 
-        guard let regex = try? NSRegularExpression(
-            pattern: #"^\s*-\s*(.+?)\s*(?:\(.+?\))?\s+(\d+)\s*%"#,
-            options: [.anchorsMatchLines]
-        ) else {
+        guard let output else { return [] }
+
+        // Parse any line that starts with '-' and contains a "<number>%"
+        guard let percentRegex = try? NSRegularExpression(pattern: #"(\d+)\s*%"#, options: []) else {
             return []
         }
 
         var entries: [PmsetAccessoryBatteryEntry] = []
-        let nsOutput = output as NSString
-        let range = NSRange(location: 0, length: nsOutput.length)
 
-        regex.enumerateMatches(in: output, options: [], range: range) { match, _, _ in
-            guard let match, match.numberOfRanges >= 3 else { return }
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("-") else { continue }
 
-            let rawName = nsOutput
-                .substring(with: match.range(at: 1))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let percentString = nsOutput.substring(with: match.range(at: 2))
+            // Remove leading '-'
+            line.removeFirst()
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            guard !rawName.isEmpty, let level = Int(percentString) else { return }
+            let nsLine = line as NSString
+            let fullRange = NSRange(location: 0, length: nsLine.length)
 
-            let normalizedName = normalizeProductName(rawName)
-            guard !normalizedName.isEmpty else { return }
-            if normalizedName.hasPrefix("internalbattery") {
-                return
+            guard let match = percentRegex.firstMatch(in: line, options: [], range: fullRange),
+                  match.numberOfRanges >= 2 else {
+                continue
             }
+
+            let percentString = nsLine.substring(with: match.range(at: 1))
+            guard let level = Int(percentString) else { continue }
+
+            // Name = everything before the percent match; strip trailing "(id=...)" if present
+            var namePart = nsLine.substring(to: match.range.location)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            namePart = namePart.replacingOccurrences(
+                of: #"\s*\([^)]*\)\s*$"#,
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !namePart.isEmpty else { continue }
+
+            let normalizedName = normalizeProductName(namePart)
+            guard !normalizedName.isEmpty else { continue }
+            if normalizedName.hasPrefix("internalbattery") { continue }
 
             entries.append(
                 PmsetAccessoryBatteryEntry(
-                    displayName: rawName,
+                    displayName: namePart,
                     normalizedName: normalizedName,
                     level: level
                 )
@@ -1425,13 +1456,15 @@ class BluetoothAudioManager: ObservableObject {
 
         HUDSuppressionCoordinator.shared.suppressVolumeHUD(for: 1.5)
 
-        coordinator.toggleSneakPeek(
-            status: true,
-            type: .bluetoothAudio,
-            duration: 2.5,
-            value: batteryValue,
-            icon: device.deviceType.sfSymbol
-        )
+        Task { @MainActor in
+            coordinator.toggleSneakPeek(
+                status: true,
+                type: .bluetoothAudio,
+                duration: 2.5,
+                value: batteryValue,
+                icon: device.deviceType.sfSymbol
+            )
+        }
     }
     
     // MARK: - Cleanup
