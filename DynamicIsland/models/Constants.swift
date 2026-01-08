@@ -191,6 +191,36 @@ enum SneakPeekStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
     var id: String { self.rawValue }
 }
 
+enum CapsLockIndicatorTintMode: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case green
+    case accent
+    case white
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .green:
+            return "Green"
+        case .accent:
+            return "Accent"
+        case .white:
+            return "White"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .green:
+            return .green
+        case .accent:
+            return .accentColor
+        case .white:
+            return .white
+        }
+    }
+}
+
 enum ProgressBarStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
     case hierarchical = "Hierarchical"
     case gradient = "Gradient"
@@ -738,6 +768,13 @@ extension Defaults.Keys {
     static let enableLockScreenLiveActivity = Key<Bool>("enableLockScreenLiveActivity", default: true)
     static let enableLockSounds = Key<Bool>("enableLockSounds", default: true)
     
+    // MARK: Caps Lock Indicator
+    static let enableCapsLockIndicator = Key<Bool>("enableCapsLockIndicator", default: true)
+    static let capsLockIndicatorUseGreenColor = Key<Bool>("capsLockIndicatorUseGreenColor", default: false) // Legacy toggle
+    static let capsLockIndicatorTintMode = Key<CapsLockIndicatorTintMode>("capsLockIndicatorTintMode", default: .white)
+    static let didMigrateCapsLockTintMode = Key<Bool>("didMigrateCapsLockTintMode", default: false)
+    static let showCapsLockLabel = Key<Bool>("showCapsLockLabel", default: true)
+    
     // MARK: ImageService
     static let didClearLegacyURLCacheV1 = Key<Bool>("didClearLegacyURLCacheV1", default: false)
     
@@ -786,6 +823,14 @@ extension Defaults.Keys {
         }
 
         normalizeMusicAuxControls()
+    }
+
+    static func migrateCapsLockTintMode() {
+        guard Defaults[.didMigrateCapsLockTintMode] == false else { return }
+
+        let legacyGreen = Defaults[.capsLockIndicatorUseGreenColor]
+        Defaults[.capsLockIndicatorTintMode] = legacyGreen ? .green : .white
+        Defaults[.didMigrateCapsLockTintMode] = true
     }
 
     static func migrateMusicControlSlots() {

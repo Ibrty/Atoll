@@ -345,6 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Defaults.Keys.migrateProgressBarStyle()
         Defaults.Keys.migrateMusicAuxControls()
         Defaults.Keys.migrateMusicControlSlots()
+        Defaults.Keys.migrateCapsLockTintMode()
         
         // Initialize idle animations (load bundled + built-in face)
         idleAnimationManager.initializeDefaultAnimations()

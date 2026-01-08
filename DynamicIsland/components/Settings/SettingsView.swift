@@ -2538,6 +2538,7 @@ struct LiveActivitiesSettings: View {
     @Default(.enableScreenRecordingDetection) var enableScreenRecordingDetection
     @Default(.enableDoNotDisturbDetection) var enableDoNotDisturbDetection
     @Default(.focusIndicatorNonPersistent) var focusIndicatorNonPersistent
+    @Default(.capsLockIndicatorTintMode) var capsLockTintMode
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.liveActivities.highlightID(for: title)
@@ -2637,6 +2638,28 @@ struct LiveActivitiesSettings: View {
                 Text("Do Not Disturb")
             } footer: {
                 Text("Listens for Focus session changes via distributed notifications")
+            }
+
+            Section {
+                Defaults.Toggle("Show Caps Lock Indicator", key: .enableCapsLockIndicator)
+                    .settingsHighlight(id: highlightID("Show Caps Lock Indicator"))
+
+                Defaults.Toggle("Show Caps Lock label", key: .showCapsLockLabel)
+                    .disabled(!Defaults[.enableCapsLockIndicator])
+                    .settingsHighlight(id: highlightID("Show Caps Lock label"))
+
+                Picker("Caps Lock color", selection: $capsLockTintMode) {
+                    ForEach(CapsLockIndicatorTintMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!Defaults[.enableCapsLockIndicator])
+                .settingsHighlight(id: highlightID("Caps Lock color"))
+            } header: {
+                Text("Caps Lock Indicator")
+            } footer: {
+                Text("Adds a notch HUD when Caps Lock is enabled, with optional label and tint controls.")
             }
 
             Section {
