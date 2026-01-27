@@ -90,6 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let idleAnimationManager = IdleAnimationManager.shared  // NEW: Custom idle animations
     let downloadManager = DownloadManager.shared  // NEW: Chromium downloads detection
     let lockScreenPanelManager = LockScreenPanelManager.shared  // NEW: Lock screen music panel
+    let mediaControlsStateCoordinator = MediaControlsStateCoordinator.shared
     let systemTimerBridge = SystemTimerBridge.shared
     let extensionXPCServiceHost = ExtensionXPCServiceHost.shared
     var closeNotchWorkItem: DispatchWorkItem?
@@ -887,5 +888,100 @@ extension CGRect: @retroactive Hashable {
 
     public static func == (lhs: CGRect, rhs: CGRect) -> Bool {
         return lhs.origin == rhs.origin && lhs.size == rhs.size
+    }
+}
+
+@MainActor
+final class MediaControlsStateCoordinator {
+    static let shared = MediaControlsStateCoordinator()
+
+    private var cancellables = Set<AnyCancellable>()
+
+    private init() {
+        let masterPublisher = Defaults.publisher(.showStandardMediaControls)
+        let minimalisticPublisher = Defaults.publisher(.enableMinimalisticUI)
+
+        Publishers.CombineLatest(masterPublisher, minimalisticPublisher)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] masterChange, minimalisticChange in
+                self?.handleStateChange(
+                    showStandard: masterChange.newValue,
+                    minimalistic: minimalisticChange.newValue
+                )
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleStateChange(showStandard: Bool, minimalistic: Bool) {
+        if !showStandard && !minimalistic {
+            cacheAndDisableMusicLiveActivity()
+        } else {
+            restoreMusicLiveActivity(clearCache: showStandard)
+        }
+
+        if showStandard {
+            restoreLockScreenPanelIfNeeded()
+            restoreMusicControlWindowIfNeeded()
+        } else {
+            cacheAndDisableLockScreenPanel()
+            cacheAndDisableMusicControlWindow()
+        }
+    }
+
+    private func cacheAndDisableMusicLiveActivity() {
+        if Defaults[.cachedMusicLiveActivityPreference] == nil {
+            Defaults[.cachedMusicLiveActivityPreference] = DynamicIslandViewCoordinator.shared.musicLiveActivityEnabled
+        }
+
+        if DynamicIslandViewCoordinator.shared.musicLiveActivityEnabled {
+            DynamicIslandViewCoordinator.shared.musicLiveActivityEnabled = false
+        }
+    }
+
+    private func restoreMusicLiveActivity(clearCache: Bool) {
+        guard let cached = Defaults[.cachedMusicLiveActivityPreference] else { return }
+
+        if DynamicIslandViewCoordinator.shared.musicLiveActivityEnabled != cached {
+            DynamicIslandViewCoordinator.shared.musicLiveActivityEnabled = cached
+        }
+
+        if clearCache {
+            Defaults[.cachedMusicLiveActivityPreference] = nil
+        }
+    }
+
+    private func cacheAndDisableLockScreenPanel() {
+        if Defaults[.cachedLockScreenMediaWidgetPreference] == nil {
+            Defaults[.cachedLockScreenMediaWidgetPreference] = Defaults[.enableLockScreenMediaWidget]
+        }
+
+        if Defaults[.enableLockScreenMediaWidget] {
+            Defaults[.enableLockScreenMediaWidget] = false
+            LockScreenPanelManager.shared.hidePanel()
+        }
+    }
+
+    private func restoreLockScreenPanelIfNeeded() {
+        guard let cached = Defaults[.cachedLockScreenMediaWidgetPreference] else { return }
+        Defaults[.enableLockScreenMediaWidget] = cached
+        Defaults[.cachedLockScreenMediaWidgetPreference] = nil
+    }
+
+    private func cacheAndDisableMusicControlWindow() {
+        if Defaults[.cachedMusicControlWindowPreference] == nil {
+            Defaults[.cachedMusicControlWindowPreference] = Defaults[.musicControlWindowEnabled]
+        }
+
+        if Defaults[.musicControlWindowEnabled] {
+            Defaults[.musicControlWindowEnabled] = false
+        }
+
+        MusicControlWindowManager.shared.hide()
+    }
+
+    private func restoreMusicControlWindowIfNeeded() {
+        guard let cached = Defaults[.cachedMusicControlWindowPreference] else { return }
+        Defaults[.musicControlWindowEnabled] = cached
+        Defaults[.cachedMusicControlWindowPreference] = nil
     }
 }

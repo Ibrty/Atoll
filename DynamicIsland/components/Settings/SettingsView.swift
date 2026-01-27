@@ -1964,9 +1964,14 @@ struct Media: View {
     @Default(.lockScreenGlassStyle) private var lockScreenGlassStyle
     @Default(.lockScreenGlassCustomizationMode) private var lockScreenGlassCustomizationMode
     @Default(.lockScreenMusicAlbumParallaxEnabled) private var lockScreenMusicAlbumParallaxEnabled
+    @Default(.showStandardMediaControls) private var showStandardMediaControls
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.media.highlightID(for: title)
+    }
+
+    private var standardControlsSuppressed: Bool {
+        !showStandardMediaControls && !enableMinimalisticUI
     }
 
     var body: some View {
@@ -2001,6 +2006,23 @@ struct Media: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
+            }
+            Section {
+                Defaults.Toggle("Show media controls in Dynamic Island", key: .showStandardMediaControls)
+                    .disabled(enableMinimalisticUI)
+                    .settingsHighlight(id: highlightID("Show media controls in Dynamic Island"))
+
+                if enableMinimalisticUI {
+                    Text("Disable Minimalistic UI to configure the standard notch media controls.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if standardControlsSuppressed {
+                    Text("Standard notch media controls are hidden. Re-enable the toggle above to restore them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Dynamic Island Visibility")
             }
             Section {
                 Defaults.Toggle(key: .showShuffleAndRepeat) {
@@ -2053,11 +2075,13 @@ struct Media: View {
                     "Enable music live activity",
                     isOn: $coordinator.musicLiveActivityEnabled.animation()
                 )
+                .disabled(standardControlsSuppressed)
+                .help(standardControlsSuppressed ? "Standard notch media controls are hidden while this toggle is off." : "")
                 Defaults.Toggle(
                     "Show floating media controls",
                     key: .musicControlWindowEnabled
                 )
-                .disabled(!coordinator.musicLiveActivityEnabled)
+                .disabled(!coordinator.musicLiveActivityEnabled || standardControlsSuppressed)
                 .help("Displays play/pause and skip buttons beside the notch while music is active. Disabled by default.")
                 Toggle("Enable sneak peek", isOn: $enableSneakPeek)
                 Toggle("Show sneak peek on playback changes", isOn: $showSneakPeekOnTrackChange)
@@ -2124,6 +2148,8 @@ struct Media: View {
             } footer: {
                 Text("These controls mirror the Lock Screen tab so you can tune the media overlay while focusing on playback settings.")
             }
+            .disabled(!showStandardMediaControls)
+            .opacity(showStandardMediaControls ? 1 : 0.5)
 
             Picker(selection: $hideNotchOption, label:
                 HStack {
@@ -3301,6 +3327,7 @@ struct LockScreenSettings: View {
     @Default(.lockScreenWeatherShowsAQI) private var lockScreenWeatherShowsAQI
     @Default(.lockScreenWeatherShowsSunrise) private var lockScreenWeatherShowsSunrise
     @Default(.lockScreenWeatherAQIScale) private var lockScreenWeatherAQIScale
+    @Default(.showStandardMediaControls) private var showStandardMediaControls
 
     private func highlightID(_ title: String) -> String {
         SettingsTab.lockScreen.highlightID(for: title)
@@ -3422,11 +3449,20 @@ struct LockScreenSettings: View {
                         .opacity(enableLockScreenMediaWidget ? 1 : 0.5)
                         .settingsHighlight(id: highlightID("Enable media panel blur"))
                 }
+
+                if !showStandardMediaControls {
+                    Text("Enable Dynamic Island media controls to manage the lock screen panel.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } header: {
                 Text("Media Panel")
             } footer: {
                 Text("Enable and style the media controls that appear above the system clock when the screen is locked.")
             }
+            .disabled(!showStandardMediaControls)
+            .opacity(showStandardMediaControls ? 1 : 0.5)
 
             Section {
                 Defaults.Toggle("Show lock screen timer", key: .enableLockScreenTimerWidget)

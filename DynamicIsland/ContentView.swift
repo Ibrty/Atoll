@@ -66,6 +66,7 @@ struct ContentView: View {
     @Default(.enableScreenRecordingDetection) var enableScreenRecordingDetection
     @Default(.enableCapsLockIndicator) var enableCapsLockIndicator
     @Default(.enableExtensionLiveActivities) var enableExtensionLiveActivities
+    @Default(.showStandardMediaControls) var showStandardMediaControls
     
     // Dynamic sizing based on view type and graph count with smooth transitions
     var dynamicNotchSize: CGSize {
@@ -171,6 +172,14 @@ struct ContentView: View {
     private let statsAdditionalRowHeight: CGFloat = 110
     private let musicControlPauseGrace: TimeInterval = 5
     private let musicControlResumeDelay: TimeInterval = 0.24
+
+    private var standardMediaControlsActive: Bool {
+        showStandardMediaControls && !enableMinimalisticUI
+    }
+
+    private var closedMusicContentEnabled: Bool {
+        enableMinimalisticUI || showStandardMediaControls
+    }
     
     // Use minimalistic corner radius ONLY when opened, keep normal when closed
     private var activeCornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) {
@@ -449,6 +458,12 @@ struct ContentView: View {
                 enqueueMusicControlWindowSync(forceRefresh: true, delay: 0.05)
             }
         }
+        .onChange(of: showStandardMediaControls) { _, _ in
+            handleStandardMediaControlsAvailabilityChange()
+        }
+        .onChange(of: enableMinimalisticUI) { _, _ in
+            handleStandardMediaControlsAvailabilityChange()
+        }
         .onChange(of: gestureProgress) { _, _ in
             if shouldShowMusicControlWindow() {
                 enqueueMusicControlWindowSync(forceRefresh: true, delay: 0.05)
@@ -506,6 +521,7 @@ struct ContentView: View {
                       let musicPairingEligible = vm.notchState == .closed
                           && hasActiveMusicSnapshot
                           && coordinator.musicLiveActivityEnabled
+                          && closedMusicContentEnabled
                           && !vm.hideOnClosed
                           && !lockScreenManager.isLocked
                       let musicSecondary = resolveMusicSecondaryLiveActivity(isMusicPairingEligible: musicPairingEligible)
@@ -1181,6 +1197,15 @@ struct ContentView: View {
             return nil
         }
 
+        guard standardMediaControlsActive else {
+            ExtensionRoutingDiagnostics.shared.logSuppression(
+                .music,
+                reason: "standard media controls disabled",
+                pendingCount: candidates.count
+            )
+            return nil
+        }
+
         guard vm.notchState == .closed else {
             ExtensionRoutingDiagnostics.shared.logSuppression(
                 .music,
@@ -1706,6 +1731,26 @@ struct ContentView: View {
         }
     }
 
+    private func handleStandardMediaControlsAvailabilityChange() {
+        guard musicControlWindowEnabled else {
+            hideMusicControlWindow()
+            return
+        }
+
+        if standardMediaControlsActive {
+            if musicManager.isPlaying || !musicManager.isPlayerIdle {
+                clearMusicControlVisibilityDeadline()
+            }
+            enqueueMusicControlWindowSync(forceRefresh: true)
+        } else {
+            cancelMusicControlWindowSync()
+            hideMusicControlWindow()
+            clearMusicControlVisibilityDeadline()
+            hasPendingMusicControlSync = false
+            pendingMusicControlForceRefresh = false
+        }
+    }
+
     private func extendMusicControlVisibilityAfterPause() {
         let deadline = Date().addingTimeInterval(musicControlPauseGrace)
         musicControlVisibilityDeadline = deadline
@@ -1817,6 +1862,7 @@ struct ContentView: View {
     private func shouldShowMusicControlWindow() -> Bool {
         guard musicControlWindowEnabled,
               coordinator.musicLiveActivityEnabled,
+              standardMediaControlsActive,
               vm.notchState == .closed,
               !vm.hideOnClosed,
               !lockScreenManager.isLocked,
