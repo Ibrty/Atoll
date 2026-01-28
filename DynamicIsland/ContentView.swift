@@ -162,10 +162,7 @@ struct ContentView: View {
         enqueueMusicControlWindowSync(forceRefresh: forceRefresh, delay: delay)
     }
     private var dynamicNotchResizeAnimation: Animation? {
-        if enableMinimalisticUI && reminderManager.activeWindowReminders.isEmpty == false {
-            return nil
-        }
-        return .easeInOut(duration: 0.4)
+        nil
     }
     
     private let zeroHeightHoverPadding: CGFloat = 10
@@ -206,14 +203,27 @@ struct ContentView: View {
 
     var body: some View {
         let interactionsEnabled = !lockScreenManager.isLocked
+        let notchHorizontalPadding: CGFloat = {
+            guard vm.notchState == .open else {
+                return activeCornerRadiusInsets.closed.bottom
+            }
+            if Defaults[.cornerRadiusScaling] {
+                return activeCornerRadiusInsets.opened.top - 5
+            }
+            return activeCornerRadiusInsets.opened.bottom - 5
+        }()
+        let hoverAreaPadding: CGFloat = {
+            if vm.notchState == .open && Defaults[.extendHoverArea] {
+                return 0
+            }
+            return vm.effectiveClosedNotchHeight == 0 ? zeroHeightHoverPadding : 0
+        }()
+        let notchBottomPadding = currentShadowPadding + hoverAreaPadding
 
         ZStack(alignment: .top) {
             let mainLayout = NotchLayout()
                 .frame(alignment: .top)
-                .padding(.horizontal, vm.notchState == .open
-                         ? Defaults[.cornerRadiusScaling] ? (activeCornerRadiusInsets.opened.top - 5) : (activeCornerRadiusInsets.opened.bottom - 5)
-                         : activeCornerRadiusInsets.closed.bottom
-                )
+                .padding(.horizontal, notchHorizontalPadding)
                 .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
                 .background(.black)
                 .clipShape(currentNotchShape)
@@ -224,23 +234,15 @@ struct ContentView: View {
                         : .clear,
                     radius: Defaults[.cornerRadiusScaling] ? 10 : 5
                 )
-                .padding(.bottom,
-                    currentShadowPadding + (
-                        vm.notchState == .open && Defaults[.extendHoverArea]
-                            ? 0
-                            : (vm.effectiveClosedNotchHeight == 0 ? zeroHeightHoverPadding : 0)
-                    )
-                )
+                .padding(.bottom, notchBottomPadding)
 
             mainLayout
                 .conditionalModifier(!useModernCloseAnimation) { view in
                     let hoverAnimation = Animation.bouncy.speed(1.2)
                     let notchStateAnimation = Animation.spring.speed(1.2)
-                    let viewTransitionAnimation = Animation.easeInOut(duration: 0.4)
                     return view
                         .animation(hoverAnimation, value: isHovering)
                         .animation(notchStateAnimation, value: vm.notchState)
-                        .animation(viewTransitionAnimation, value: coordinator.currentView)
                         .animation(.smooth, value: gestureProgress)
                         .transition(.blurReplace.animation(.interactiveSpring(dampingFraction: 1.2)))
                 }
@@ -248,12 +250,10 @@ struct ContentView: View {
                     let hoverAnimation = Animation.bouncy.speed(1.2)
                     let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
                     let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
-                    let viewTransitionAnimation = Animation.easeInOut(duration: 0.4)
                     let notchAnimation = vm.notchState == .open ? openAnimation : closeAnimation
                     return view
                         .animation(hoverAnimation, value: isHovering)
                         .animation(notchAnimation, value: vm.notchState)
-                        .animation(viewTransitionAnimation, value: coordinator.currentView)
                         .animation(.smooth, value: gestureProgress)
                 }
                 .conditionalModifier(interactionsEnabled) { view in
@@ -382,13 +382,10 @@ struct ContentView: View {
         maxHeight: dynamicNotchSize.height + currentShadowPadding,
         alignment: .top
     )
-    .animation(dynamicNotchResizeAnimation, value: dynamicNotchSize)
-        .animation(.easeInOut(duration: 0.4), value: coordinator.currentView)
         .environmentObject(privacyManager)
         .onChange(of: dynamicNotchSize) { oldSize, newSize in
             guard oldSize != newSize else { return }
-            let delay: TimeInterval = dynamicNotchResizeAnimation == nil ? 0.25 : 1.0
-            runAfter(delay) {
+            runAfter(0.1) {
                 vm.shouldRecheckHover.toggle()
             }
         }
@@ -738,14 +735,9 @@ struct ContentView: View {
                                 }
                           }
                       }
-                      .transition(.asymmetric(
-                          insertion: .scale(scale: 0.8).combined(with: .opacity).animation(.easeInOut(duration: 0.4)),
-                          removal: .scale(scale: 0.8).combined(with: .opacity).animation(.easeInOut(duration: 0.4))
-                      ))
                       .id(coordinator.currentView) // Force SwiftUI to treat each view as unique
                   }
               }
-              .animation(.easeInOut(duration: 0.4), value: coordinator.currentView)
               .zIndex(1)
               .allowsHitTesting(vm.notchState == .open)
               .blur(radius: abs(gestureProgress) > 0.3 ? min(abs(gestureProgress), 8) : 0)

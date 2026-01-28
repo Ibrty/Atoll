@@ -209,6 +209,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
+
+        window.animationBehavior = .none
         
         window.contentView = NSHostingView(
             rootView: ContentView()
@@ -252,6 +254,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let requiredSize = calculateRequiredNotchSize()
         let animateResize = shouldAnimateResize(for: requiredSize)
         resizeWindows(to: requiredSize, animated: animateResize, force: false)
+    }
+
+    private func updateWindowSizeForTabSwitch() {
+        let requiredSize = calculateRequiredNotchSize()
+        resizeWindows(to: requiredSize, animated: false, force: true)
     }
     
     private func calculateRequiredNotchSize() -> CGSize {
@@ -321,16 +328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let newY = screenFrame.origin.y + screenFrame.height - size.height
         let targetFrame = NSRect(x: newX, y: newY, width: size.width, height: size.height)
 
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.25
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                context.allowsImplicitAnimation = true
-                window.animator().setFrame(targetFrame, display: true)
-            }
-        } else {
-            window.setFrame(targetFrame, display: true)
-        }
+        window.setFrame(targetFrame, display: true)
     }
 
     private func shouldAnimateResize(for newSize: CGSize) -> Bool {
@@ -370,9 +368,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup Privacy Indicator Manager (camera and microphone monitoring)
         PrivacyIndicatorManager.shared.startMonitoring()
         
-        // Observe tab changes - use immediate updates to prevent clipping
-        coordinator.$currentView.sink { [weak self] newView in
-            self?.updateWindowSizeIfNeeded()
+        // Observe tab changes - use immediate resize to keep the notch pinned
+        coordinator.$currentView.sink { [weak self] _ in
+            self?.updateWindowSizeForTabSwitch()
         }.store(in: &cancellables)
 
         coordinator.$notesLayoutState

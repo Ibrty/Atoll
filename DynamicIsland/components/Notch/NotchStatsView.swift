@@ -63,9 +63,6 @@ struct NotchStatsView: View {
     @State private var isHoveringGPUPopover = false
     @State private var isHoveringNetworkPopover = false
     @State private var isHoveringDiskPopover = false
-    @State private var isResizingForStats = false
-    @State private var statsHoverGraceActive = false
-    @State private var statsHoverGraceWorkItem: DispatchWorkItem?
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
 
@@ -149,8 +146,8 @@ struct NotchStatsView: View {
                 }
             }
         } else if graphCount == 4 {
-            // 4 graphs: second row scales from zero height on tab open
-            VStack(spacing: 0) {
+            // 4 graphs: two rows (2x2) without a collapsible expansion
+            VStack(spacing: statsGridSpacingHeight) {
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
                     spacing: 12
@@ -159,26 +156,18 @@ struct NotchStatsView: View {
                         graphViewForIndex(index)
                     }
                 }
-
-                StatsCollapsibleRow(
-                    expansion: coordinator.statsSecondRowExpansion,
-                    height: statsSecondRowContentHeight + statsGridSpacingHeight
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
+                    spacing: 12
                 ) {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
-                        spacing: 12
-                    ) {
-                        ForEach(2..<graphCount, id: \.self) { index in
-                            graphViewForIndex(index)
-                        }
+                    ForEach(2..<graphCount, id: \.self) { index in
+                        graphViewForIndex(index)
                     }
-                    .padding(.top, statsGridSpacingHeight)
                 }
             }
         } else {
             // 5 graphs: First row 3 graphs, second row 2 graphs (half-width each)
-            VStack(spacing: 0) {
-                // First row: 3 graphs
+            VStack(spacing: statsGridSpacingHeight) {
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
                     spacing: 8
@@ -187,20 +176,13 @@ struct NotchStatsView: View {
                         graphViewForIndex(index)
                     }
                 }
-                // Second row: 2 graphs (half-width each)
-                StatsCollapsibleRow(
-                    expansion: coordinator.statsSecondRowExpansion,
-                    height: statsSecondRowContentHeight + statsGridSpacingHeight
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
+                    spacing: 8
                 ) {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
-                        spacing: 8
-                    ) {
-                        ForEach(3..<graphCount, id: \.self) { index in
-                            graphViewForIndex(index)
-                        }
+                    ForEach(3..<graphCount, id: \.self) { index in
+                        graphViewForIndex(index)
                     }
-                    .padding(.top, statsGridSpacingHeight)
                 }
             }
         }
@@ -382,68 +364,26 @@ struct NotchStatsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             // Note: Smart monitoring will handle starting/stopping based on notch state and current view
-            // Protect against hover interference during view transition
-            isResizingForStats = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                isResizingForStats = false
-            }
         }
         .onDisappear {
-            statsHoverGraceWorkItem?.cancel()
-            statsHoverGraceWorkItem = nil
-            if statsHoverGraceActive {
-                statsHoverGraceActive = false
-            }
             // Keep monitoring running when tab is not visible
             updateStatsPopoverState()
         }
         .animation(.easeInOut(duration: 0.4), value: enableStatsFeature)
         .animation(.easeInOut(duration: 0.4), value: availableGraphs.count)
-        .onChange(of: availableGraphs.count) { _, _ in
-            // Protect against hover interference during dynamic sizing
-            isResizingForStats = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                isResizingForStats = false
-            }
-        }
         .onChange(of: showingCPUPopover) { _, newValue in
-            if newValue {
-                activateStatsHoverGrace()
-            } else {
-                deactivateStatsHoverGrace()
-            }
             updateStatsPopoverState()
         }
         .onChange(of: showingMemoryPopover) { _, newValue in
-            if newValue {
-                activateStatsHoverGrace()
-            } else {
-                deactivateStatsHoverGrace()
-            }
             updateStatsPopoverState()
         }
         .onChange(of: showingGPUPopover) { _, newValue in
-            if newValue {
-                activateStatsHoverGrace()
-            } else {
-                deactivateStatsHoverGrace()
-            }
             updateStatsPopoverState()
         }
         .onChange(of: showingNetworkPopover) { _, newValue in
-            if newValue {
-                activateStatsHoverGrace()
-            } else {
-                deactivateStatsHoverGrace()
-            }
             updateStatsPopoverState()
         }
         .onChange(of: showingDiskPopover) { _, newValue in
-            if newValue {
-                activateStatsHoverGrace()
-            } else {
-                deactivateStatsHoverGrace()
-            }
             updateStatsPopoverState()
         }
         .onChange(of: isHoveringCPUPopover) { _, _ in
@@ -461,76 +401,10 @@ struct NotchStatsView: View {
         .onChange(of: isHoveringDiskPopover) { _, _ in
             updateStatsPopoverState()
         }
-        .onChange(of: coordinator.statsSecondRowExpansion) { _, newValue in
-            let shouldHold = availableGraphs.count >= 4 && newValue < 0.999
-            if shouldHold {
-                isResizingForStats = true
-            } else {
-                DispatchQueue.main.async {
-                    isResizingForStats = false
-                }
-            }
-        }
     }
-
-
-private struct StatsCollapsibleRow<Content: View>: View {
-    let expansion: CGFloat
-    let height: CGFloat
-    let content: () -> Content
-    private let minVisibleHeight: CGFloat = 0.5
-
-    init(expansion: CGFloat, height: CGFloat, @ViewBuilder content: @escaping () -> Content) {
-        self.expansion = expansion
-        self.height = height
-        self.content = content
-    }
-
-    var body: some View {
-        let clamped = max(0, min(expansion, 1))
-        let targetHeight = clamped == 0 ? 0 : max(height * clamped, minVisibleHeight)
-
-        return Group {
-            if targetHeight == 0 {
-                Color.clear.frame(height: 0)
-            } else {
-                content()
-                    .frame(height: height, alignment: .top)
-                    .clipped()
-                    .mask(
-                        Rectangle()
-                            .frame(height: targetHeight)
-                            .frame(maxWidth: .infinity, alignment: .top)
-                    )
-                    .frame(height: targetHeight, alignment: .top)
-            }
-        }
-        .animation(.easeInOut(duration: 0.3), value: clamped)
-    }
-}
-    private func activateStatsHoverGrace(duration: TimeInterval = 0.45) {
-        statsHoverGraceWorkItem?.cancel()
-        statsHoverGraceActive = true
-        let workItem = DispatchWorkItem {
-            statsHoverGraceActive = false
-            statsHoverGraceWorkItem = nil
-            updateStatsPopoverState()
-        }
-        statsHoverGraceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: workItem)
-    }
-
-    private func deactivateStatsHoverGrace() {
-        statsHoverGraceWorkItem?.cancel()
-        statsHoverGraceWorkItem = nil
-        if statsHoverGraceActive {
-            statsHoverGraceActive = false
-        }
-    }
-    
     private func updateStatsPopoverState() {
         let anyPopoverOpen = showingCPUPopover || showingMemoryPopover || showingGPUPopover || showingNetworkPopover || showingDiskPopover
-        let newState = anyPopoverOpen || isResizingForStats || statsHoverGraceActive
+        let newState = anyPopoverOpen
         if vm.isStatsPopoverActive != newState {
             vm.isStatsPopoverActive = newState
             #if DEBUG
@@ -540,8 +414,6 @@ private struct StatsCollapsibleRow<Content: View>: View {
             print("   GPU open=\(showingGPUPopover)")
             print("   Network open=\(showingNetworkPopover)")
             print("   Disk open=\(showingDiskPopover)")
-            print("   Resizing: \(isResizingForStats)")
-            print("   Hover grace: \(statsHoverGraceActive)")
             #endif
         }
     }
