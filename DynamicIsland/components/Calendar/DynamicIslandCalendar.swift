@@ -1,20 +1,9 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  DynamicIslandCalendar.swift
+//  DynamicIsland
+//
+//  Created by Harsh Vardhan  Goswami  on 08/09/24.
+//
 
 import SwiftUI
 import Defaults
@@ -224,7 +213,6 @@ struct CalendarView: View {
             )
             if filteredEvents.isEmpty {
                 EmptyEventsView(selectedDate: selectedDate)
-                Spacer(minLength: 0)
             } else {
                 EventListView(events: calendarManager.events)
             }
@@ -343,18 +331,8 @@ struct EventListView: View {
                 .scrollIndicators(.never)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
-
-                LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 16)
-                    .allowsHitTesting(false)
-                    .alignmentGuide(.top) { d in d[.top] }
-                    .frame(maxHeight: .infinity, alignment: .top)
-
-                LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 16)
-                    .allowsHitTesting(false)
-                    .alignmentGuide(.bottom) { d in d[.bottom] }
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+                // Remove the extra built-in List padding that creates a big empty area at the bottom.
+                .padding(.bottom, -20)
             }
             .onAppear {
                 scrollToRelevantEvent(proxy: proxy)
@@ -363,7 +341,6 @@ struct EventListView: View {
                 scrollToRelevantEvent(proxy: proxy)
             }
         }
-        Spacer(minLength: 0)
     }
 
     private func eventRow(_ event: EventModel) -> some View {

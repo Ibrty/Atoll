@@ -1,21 +1,3 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 import Foundation
 import Defaults
 import CoreLocation
@@ -53,32 +35,19 @@ final class LockScreenWeatherManager: ObservableObject {
         }
 
         locationProvider.prepareAuthorization()
-        let existingSnapshot = snapshot
-        let hadSnapshot = existingSnapshot != nil
-        var cachedSnapshot = existingSnapshot
-
-        if cachedSnapshot == nil, let payload = latestWeatherPayload {
-            let derivedSnapshot = makeSnapshot(from: payload)
-            snapshot = derivedSnapshot
-            cachedSnapshot = derivedSnapshot
-        }
-
-        if let cachedSnapshot {
-            deliver(cachedSnapshot, forceShow: true)
-        }
-
-        let needsForceShowOnRefresh = cachedSnapshot == nil
-        let shouldForceRefresh = !hadSnapshot
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let refreshedSnapshot = await self.refresh(force: shouldForceRefresh)
+            let snapshot = await self.refresh(force: self.snapshot == nil)
 
-            guard LockScreenManager.shared.currentLockStatus else { return }
+            guard LockScreenManager.shared.currentLockStatus else {
+                LockScreenWeatherPanelManager.shared.hide()
+                return
+            }
 
-            if let refreshedSnapshot {
-                self.deliver(refreshedSnapshot, forceShow: needsForceShowOnRefresh)
-            } else if needsForceShowOnRefresh {
+            if let snapshot {
+                self.deliver(snapshot, forceShow: true)
+            } else {
                 LockScreenWeatherPanelManager.shared.hide()
             }
         }
@@ -96,7 +65,7 @@ final class LockScreenWeatherManager: ObservableObject {
             let remaining = interval - Date().timeIntervalSince(lastFetchDate)
             NSLog("LockScreenWeatherManager: skipping refresh (%.0f s remaining until next fetch)", max(remaining, 0))
             if let payload = latestWeatherPayload {
-                if Defaults[.lockScreenBatteryShowsBluetooth] {
+                if Defaults[.lockScreenWeatherShowsBluetooth] {
                     BluetoothAudioManager.shared.refreshConnectedDeviceBatteries()
                 }
                 let snapshot = makeSnapshot(from: payload)
@@ -120,7 +89,7 @@ final class LockScreenWeatherManager: ObservableObject {
             )
             let payload = try await fetchWeatherPayload(location: location)
             latestWeatherPayload = payload
-            if Defaults[.lockScreenBatteryShowsBluetooth] {
+            if Defaults[.lockScreenWeatherShowsBluetooth] {
                 BluetoothAudioManager.shared.refreshConnectedDeviceBatteries()
             }
             let snapshot = makeSnapshot(from: payload)
@@ -133,9 +102,9 @@ final class LockScreenWeatherManager: ObservableObject {
             NSLog("LockScreenWeatherManager: failed to fetch weather - \(error.localizedDescription)")
 
             let providerSource = Defaults[.lockScreenWeatherProviderSource]
-            let showsCharging = Defaults[.lockScreenBatteryShowsCharging]
+            let showsCharging = Defaults[.lockScreenWeatherShowsCharging]
             let chargingInfo = showsCharging ? makeChargingInfo() : nil
-            let showsBatteryGauge = Defaults[.lockScreenBatteryShowsBatteryGauge]
+            let showsBatteryGauge = Defaults[.lockScreenWeatherShowsBatteryGauge]
             let widgetStyle = Defaults[.lockScreenWeatherWidgetStyle]
             let batteryInfo = showsBatteryGauge ? makeBatteryGaugeInfo(isCharging: chargingInfo != nil, widgetStyle: widgetStyle) : nil
             let showsSunriseSetting = Defaults[.lockScreenWeatherShowsSunrise]
@@ -147,12 +116,12 @@ final class LockScreenWeatherManager: ObservableObject {
                 description: snapshot?.description ?? "",
                 locationName: snapshot?.locationName,
                 charging: chargingInfo,
-                bluetooth: Defaults[.lockScreenBatteryShowsBluetooth] ? makeBluetoothInfo() : nil,
+                bluetooth: Defaults[.lockScreenWeatherShowsBluetooth] ? makeBluetoothInfo() : nil,
                 battery: batteryInfo,
                 showsLocation: snapshot?.showsLocation ?? false,
                 airQuality: (providerSource.supportsAirQuality && Defaults[.lockScreenWeatherShowsAQI]) ? snapshot?.airQuality : nil,
                 widgetStyle: widgetStyle,
-                showsChargingPercentage: Defaults[.lockScreenBatteryShowsChargingPercentage],
+                showsChargingPercentage: Defaults[.lockScreenWeatherShowsChargingPercentage],
                 temperatureInfo: snapshot?.temperatureInfo,
                 usesGaugeTint: Defaults[.lockScreenWeatherUsesGaugeTint],
                 sunCycle: sunCycle,
@@ -218,15 +187,15 @@ final class LockScreenWeatherManager: ObservableObject {
         let defaultsPublishers: [AnyPublisher<Void, Never>] = [
             Defaults.publisher(.lockScreenWeatherShowsLocation, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lockScreenBatteryShowsCharging, options: [])
+            Defaults.publisher(.lockScreenWeatherShowsCharging, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lockScreenBatteryShowsChargingPercentage, options: [])
+            Defaults.publisher(.lockScreenWeatherShowsChargingPercentage, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lockScreenBatteryShowsBluetooth, options: [])
+            Defaults.publisher(.lockScreenWeatherShowsBluetooth, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lockScreenBatteryShowsBatteryGauge, options: [])
+            Defaults.publisher(.lockScreenWeatherShowsBatteryGauge, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
-            Defaults.publisher(.lockScreenBatteryUsesLaptopSymbol, options: [])
+            Defaults.publisher(.lockScreenWeatherBatteryUsesLaptopSymbol, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
             Defaults.publisher(.lockScreenWeatherShowsSunrise, options: [])
                 .map { _ in () }.eraseToAnyPublisher(),
@@ -323,14 +292,14 @@ final class LockScreenWeatherManager: ObservableObject {
 
     private func makeSnapshot(from payload: LockScreenWeatherSnapshot) -> LockScreenWeatherSnapshot {
         let locationName = payload.locationName
-        let chargingInfo = Defaults[.lockScreenBatteryShowsCharging] ? makeChargingInfo() : nil
-        let bluetoothInfo = Defaults[.lockScreenBatteryShowsBluetooth] ? makeBluetoothInfo() : nil
+        let chargingInfo = Defaults[.lockScreenWeatherShowsCharging] ? makeChargingInfo() : nil
+        let bluetoothInfo = Defaults[.lockScreenWeatherShowsBluetooth] ? makeBluetoothInfo() : nil
         let widgetStyle = Defaults[.lockScreenWeatherWidgetStyle]
         let shouldShowLocation = widgetStyle == .inline && Defaults[.lockScreenWeatherShowsLocation] && !(locationName?.isEmpty ?? true)
-        let showsChargingPercentage = Defaults[.lockScreenBatteryShowsChargingPercentage]
+        let showsChargingPercentage = Defaults[.lockScreenWeatherShowsChargingPercentage]
         let providerSource = Defaults[.lockScreenWeatherProviderSource]
         let airQualityInfo = (Defaults[.lockScreenWeatherShowsAQI] && providerSource.supportsAirQuality) ? payload.airQuality : nil
-        let batteryInfo = Defaults[.lockScreenBatteryShowsBatteryGauge] ? makeBatteryGaugeInfo(isCharging: chargingInfo != nil, widgetStyle: widgetStyle) : nil
+        let batteryInfo = Defaults[.lockScreenWeatherShowsBatteryGauge] ? makeBatteryGaugeInfo(isCharging: chargingInfo != nil, widgetStyle: widgetStyle) : nil
         let usesGaugeTint = Defaults[.lockScreenWeatherUsesGaugeTint]
         let showsSunriseSetting = Defaults[.lockScreenWeatherShowsSunrise]
         let shouldShowSunrise = showsSunriseSetting && widgetStyle == .inline && payload.sunCycle?.sunrise != nil
@@ -388,7 +357,7 @@ final class LockScreenWeatherManager: ObservableObject {
 
         guard clampedLevel >= 0 else { return nil }
 
-        let usesLaptopSymbol = Defaults[.lockScreenBatteryUsesLaptopSymbol]
+        let usesLaptopSymbol = Defaults[.lockScreenWeatherBatteryUsesLaptopSymbol]
 
         return LockScreenWeatherSnapshot.BatteryInfo(
             batteryLevel: clampedLevel,
@@ -468,7 +437,7 @@ struct LockScreenWeatherSnapshot: Equatable {
                 return "bolt.fill"
             }
             if isPluggedIn {
-                return "powerplug.portrait.fill"
+                return "battery.100percent.bolt"
             }
             return ""
         }
@@ -1140,3 +1109,4 @@ private final class LockScreenWeatherLocationProvider: NSObject, CLLocationManag
         continuations.forEach { $0.resume(returning: location) }
     }
 }
+

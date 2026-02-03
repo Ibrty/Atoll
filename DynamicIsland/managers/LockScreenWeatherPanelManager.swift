@@ -1,21 +1,3 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 import AppKit
 import SwiftUI
 import SkyLightWindow
@@ -56,7 +38,7 @@ final class LockScreenWeatherPanelManager {
     }
 
     private func render(snapshot: LockScreenWeatherSnapshot, makeVisible: Bool) {
-        guard let screen = currentScreen() else { return }
+        guard let screen = NSScreen.main else { return }
         if !makeVisible, window == nil {
             return
         }
@@ -120,8 +102,8 @@ final class LockScreenWeatherPanelManager {
 
         let inlineLift: CGFloat = snapshot.widgetStyle == .inline ? 44 : 0
         let userOffset = CGFloat(Defaults[.lockScreenWeatherVerticalOffset])
-        let clampedOffset = min(max(userOffset, -160), 160)
-        let adjustedY = loweredY + inlineLift + clampedOffset
+        
+        let adjustedY = loweredY + inlineLift + userOffset
         let upperClampedY = min(maxY, adjustedY)
         let clampedY = max(screenFrame.minY + 80, upperClampedY)
         return NSRect(x: originX, y: clampedY, width: size.width, height: size.height)
@@ -129,7 +111,7 @@ final class LockScreenWeatherPanelManager {
 
     func refreshPositionForOffsets(animated: Bool = true) {
         guard let window, let snapshot = lastSnapshot else { return }
-        guard let screen = currentScreen() else { return }
+        guard let screen = NSScreen.main else { return }
         let size = lastContentSize ?? window.frame.size
         let targetFrame = frame(for: size, snapshot: snapshot, on: screen)
         latestFrame = targetFrame
@@ -170,9 +152,5 @@ final class LockScreenWeatherPanelManager {
         guard window?.isVisible == true else { return }
         refreshPositionForOffsets(animated: false)
         print("LockScreenWeatherPanelManager: realigned window due to \(reason)")
-    }
-
-    private func currentScreen() -> NSScreen? {
-        LockScreenDisplayContextProvider.shared.contextSnapshot()?.screen ?? NSScreen.main
     }
 }
