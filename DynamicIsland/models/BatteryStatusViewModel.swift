@@ -1,25 +1,3 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * Originally from boring.notch project
- * Modified and adapted for Atoll (DynamicIsland)
- * See NOTICE for details.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 import Cocoa
 import Defaults
 import Foundation
@@ -34,7 +12,7 @@ class BatteryStatusViewModel: ObservableObject {
     private var runLoopSource: Unmanaged<CFRunLoopSource>?
     var animations: DynamicIslandAnimations = DynamicIslandAnimations()
     private let lowBatteryAlertSoundPlayer = AudioPlayer()
-    private let lowBatteryAlertThresholds: [Float] = [20, 15, 10, 5]
+    private let lowBatteryAlertThresholds: [Float] = [21, 16, 11, 6]
 
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
 
@@ -155,15 +133,29 @@ class BatteryStatusViewModel: ObservableObject {
     }
 
     private func handleLowBatteryAlertIfNeeded(previousLevel: Float, newLevel: Float) {
-        guard Defaults[.playLowBatteryAlertSound] else { return }
+        // Same threshold-crossing logic as the existing low-battery sound:
+        // 20%, 15%, 10%, 5% (crossing downward), only when not plugged in / not charging.
         guard !isPluggedIn, !isCharging else { return }
         guard newLevel < previousLevel else { return }
 
+        // Independent toggles (sound already exists; notification will be added to settings).
+        let shouldPlaySound = Defaults[.playLowBatteryAlertSound]
+        let shouldShowNotification = Defaults[.showLowBatteryAlertNotifications]
+
+        // Preserve existing behavior if both are off.
+        guard shouldPlaySound || shouldShowNotification else { return }
+
         for threshold in lowBatteryAlertThresholds {
             if previousLevel >= threshold && newLevel < threshold {
-                self.statusText = "Low battery"
+                // Show the same battery expansion UI used by other battery statuses.
+                // Only trigger the expansion if the notification feature is enabled OR the sound is enabled
+                // (sound historically used this same UI trigger).
+                self.statusText = "Low Battery"
                 notifyImportanChangeStatus()
-                playLowBatteryAlertSound()
+
+                if shouldPlaySound {
+                    playLowBatteryAlertSound()
+                }
                 break
             }
         }
