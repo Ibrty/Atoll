@@ -1,29 +1,13 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * Originally from boring.notch project
- * Modified and adapted for Atoll (DynamicIsland)
- * See NOTICE for details.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  Constants.swift
+//  DynamicIsland
+//
+//  Created by Richard Kunkli on 2024. 10. 17..
+//  Modified by Hariharan Mudaliar
 
 import SwiftUI
 import Defaults
 import Lottie
-import Foundation
 
 private let availableDirectories = FileManager
     .default
@@ -40,32 +24,6 @@ struct CustomVisualizer: Codable, Hashable, Equatable, Defaults.Serializable {
     var name: String
     var url: URL
     var speed: CGFloat = 1.0
-}
-
-struct CustomAppIcon: Codable, Hashable, Equatable, Defaults.Serializable, Identifiable {
-    let id: UUID
-    var name: String
-    var fileName: String
-    var addedAt: Date
-
-    init(id: UUID = UUID(), name: String, fileName: String, addedAt: Date = .now) {
-        self.id = id
-        self.name = name
-        self.fileName = fileName
-        self.addedAt = addedAt
-    }
-
-    static let iconDirectory: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("DynamicIsland", isDirectory: true)
-            .appendingPathComponent("AppIcons", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    var fileURL: URL {
-        Self.iconDirectory.appendingPathComponent(fileName)
-    }
 }
 
 // MARK: - Custom Idle Animation Models
@@ -136,118 +94,6 @@ enum AnimationSource: Codable, Hashable, Equatable {
         case .lottieURL: return "Remote"
         case .builtInFace: return "Built-in"
         }
-    }
-}
-
-// MARK: - Extension Authorization Models
-
-enum ExtensionPermissionScope: String, CaseIterable, Codable, Defaults.Serializable {
-    case liveActivities
-    case lockScreenWidgets
-    case notchExperiences
-
-    var displayName: String {
-        switch self {
-        case .liveActivities: return "Live Activities"
-        case .lockScreenWidgets: return "Lock Screen Widgets"
-        case .notchExperiences: return "Notch Experiences"
-        }
-    }
-}
-
-enum ExtensionAuthorizationStatus: String, CaseIterable, Codable, Defaults.Serializable {
-    case pending
-    case authorized
-    case denied
-    case revoked
-
-    var isActive: Bool {
-        switch self {
-        case .authorized: return true
-        case .pending, .denied, .revoked: return false
-        }
-    }
-}
-
-struct ExtensionAuthorizationEntry: Codable, Defaults.Serializable, Identifiable, Hashable {
-    let bundleIdentifier: String
-    var appName: String
-    var status: ExtensionAuthorizationStatus
-    var allowedScopes: Set<ExtensionPermissionScope>
-    var requestedAt: Date
-    var grantedAt: Date?
-    var lastActivityAt: Date?
-    var lastDeniedReason: String?
-    var notes: String?
-
-    var id: String { bundleIdentifier }
-
-    init(
-        bundleIdentifier: String,
-        appName: String,
-        status: ExtensionAuthorizationStatus,
-        allowedScopes: Set<ExtensionPermissionScope> = Set(ExtensionPermissionScope.allCases),
-        requestedAt: Date = .now,
-        grantedAt: Date? = nil,
-        lastActivityAt: Date? = nil,
-        lastDeniedReason: String? = nil,
-        notes: String? = nil
-    ) {
-        self.bundleIdentifier = bundleIdentifier
-        self.appName = appName
-        self.status = status
-        self.allowedScopes = allowedScopes
-        self.requestedAt = requestedAt
-        self.grantedAt = grantedAt
-        self.lastActivityAt = lastActivityAt
-        self.lastDeniedReason = lastDeniedReason
-        self.notes = notes
-    }
-
-    var isAuthorized: Bool { status.isActive }
-}
-
-struct ExtensionRateLimitRecord: Codable, Defaults.Serializable, Hashable, Identifiable {
-    let bundleIdentifier: String
-    var activityTimestamps: [Date]
-    var widgetTimestamps: [Date]
-    var notchExperienceTimestamps: [Date]
-
-    var id: String { bundleIdentifier }
-
-    init(
-        bundleIdentifier: String,
-        activityTimestamps: [Date] = [],
-        widgetTimestamps: [Date] = [],
-        notchExperienceTimestamps: [Date] = []
-    ) {
-        self.bundleIdentifier = bundleIdentifier
-        self.activityTimestamps = activityTimestamps
-        self.widgetTimestamps = widgetTimestamps
-        self.notchExperienceTimestamps = notchExperienceTimestamps
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdentifier
-        case activityTimestamps
-        case widgetTimestamps
-        case notchExperienceTimestamps
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        bundleIdentifier = try container.decode(String.self, forKey: .bundleIdentifier)
-        activityTimestamps = try container.decodeIfPresent([Date].self, forKey: .activityTimestamps) ?? []
-        widgetTimestamps = try container.decodeIfPresent([Date].self, forKey: .widgetTimestamps) ?? []
-        notchExperienceTimestamps = try container.decodeIfPresent([Date].self, forKey: .notchExperienceTimestamps) ?? []
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(bundleIdentifier, forKey: .bundleIdentifier)
-        try container.encode(activityTimestamps, forKey: .activityTimestamps)
-        try container.encode(widgetTimestamps, forKey: .widgetTimestamps)
-        try container.encode(notchExperienceTimestamps, forKey: .notchExperienceTimestamps)
     }
 }
 
@@ -345,36 +191,6 @@ enum SneakPeekStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
     var id: String { self.rawValue }
 }
 
-enum CapsLockIndicatorTintMode: String, CaseIterable, Identifiable, Defaults.Serializable {
-    case green
-    case accent
-    case white
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .green:
-            return "Green"
-        case .accent:
-            return "Accent"
-        case .white:
-            return "White"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .green:
-            return .green
-        case .accent:
-            return .accentColor
-        case .white:
-            return .white
-        }
-    }
-}
-
 enum ProgressBarStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
     case hierarchical = "Hierarchical"
     case gradient = "Gradient"
@@ -411,7 +227,7 @@ enum MusicAuxiliaryControl: String, CaseIterable, Identifiable, Defaults.Seriali
         case .repeatMode:
             return "repeat"
         case .mediaOutput:
-            return "laptopcomputer"
+            return "macbook.gen2"
         case .lyrics:
             return "quote.bubble"
         }
@@ -649,7 +465,7 @@ extension Defaults.Keys {
     static let menubarIcon = Key<Bool>("menubarIcon", default: true)
     static let showOnAllDisplays = Key<Bool>("showOnAllDisplays", default: false)
     static let automaticallySwitchDisplay = Key<Bool>("automaticallySwitchDisplay", default: true)
-    static let releaseName = Key<String>("releaseName", default: "Bora Bora")
+    static let releaseName = Key<String>("releaseName", default: "Maldives")
     static let hideDynamicIslandFromScreenCapture = Key<Bool>("hideDynamicIslandFromScreenCapture", default: false)
     
         // MARK: Behavior
@@ -697,8 +513,6 @@ extension Defaults.Keys {
     static let useMusicVisualizer = Key<Bool>("useMusicVisualizer", default: true)
     static let customVisualizers = Key<[CustomVisualizer]>("customVisualizers", default: [])
     static let selectedVisualizer = Key<CustomVisualizer?>("selectedVisualizer", default: nil)
-    static let customAppIcons = Key<[CustomAppIcon]>("customAppIcons", default: [])
-    static let selectedAppIconID = Key<String?>("selectedAppIconID", default: nil)
     
         // MARK: Gestures
     static let enableGestures = Key<Bool>("enableGestures", default: true)
@@ -726,10 +540,6 @@ extension Defaults.Keys {
     static let didMigrateMusicControlSlots = Key<Bool>("didMigrateMusicControlSlots", default: false)
     static let musicSkipBehavior = Key<MusicSkipBehavior>("musicSkipBehavior", default: .track)
     static let musicControlWindowEnabled = Key<Bool>("musicControlWindowEnabled", default: false)
-    static let showStandardMediaControls = Key<Bool>("showStandardMediaControls", default: true)
-    static let cachedMusicLiveActivityPreference = Key<Bool?>("cachedMusicLiveActivityPreference", default: nil)
-    static let cachedLockScreenMediaWidgetPreference = Key<Bool?>("cachedLockScreenMediaWidgetPreference", default: nil)
-    static let cachedMusicControlWindowPreference = Key<Bool?>("cachedMusicControlWindowPreference", default: nil)
     // Enable lock screen media widget (shows the standalone panel when screen is locked)
     static let enableLockScreenMediaWidget = Key<Bool>("enableLockScreenMediaWidget", default: true)
     static let enableLockScreenWeatherWidget = Key<Bool>("enableLockScreenWeatherWidget", default: true)
@@ -738,6 +548,11 @@ extension Defaults.Keys {
     static let enableLockScreenTimerWidget = Key<Bool>("enableLockScreenTimerWidget", default: true)
     static let lockScreenWeatherRefreshInterval = Key<TimeInterval>("lockScreenWeatherRefreshInterval", default: 30 * 60)
     static let lockScreenWeatherShowsLocation = Key<Bool>("lockScreenWeatherShowsLocation", default: true)
+    static let lockScreenWeatherShowsCharging = Key<Bool>("lockScreenWeatherShowsCharging", default: true)
+    static let lockScreenWeatherShowsChargingPercentage = Key<Bool>("lockScreenWeatherShowsChargingPercentage", default: true)
+    static let lockScreenWeatherShowsBluetooth = Key<Bool>("lockScreenWeatherShowsBluetooth", default: true)
+    static let lockScreenWeatherShowsBatteryGauge = Key<Bool>("lockScreenWeatherShowsBatteryGauge", default: true)
+    static let lockScreenWeatherBatteryUsesLaptopSymbol = Key<Bool>("lockScreenWeatherBatteryUsesLaptopSymbol", default: true)
     static let lockScreenWeatherShowsSunrise = Key<Bool>("lockScreenWeatherShowsSunrise", default: true)
     static let lockScreenWeatherWidgetStyle = Key<LockScreenWeatherWidgetStyle>("lockScreenWeatherWidgetStyle", default: .circular)
     static let lockScreenWeatherTemperatureUnit = Key<LockScreenWeatherTemperatureUnit>("lockScreenWeatherTemperatureUnit", default: .celsius)
@@ -747,28 +562,9 @@ extension Defaults.Keys {
     static let lockScreenWeatherProviderSource = Key<LockScreenWeatherProviderSource>("lockScreenWeatherProviderSource", default: .openMeteo)
     static let lockScreenWeatherVerticalOffset = Key<Double>("lockScreenWeatherVerticalOffset", default: 0)
     static let lockScreenMusicVerticalOffset = Key<Double>("lockScreenMusicVerticalOffset", default: 0)
-    static let lockScreenMusicPanelWidth = Key<Double>("lockScreenMusicPanelWidth", default: 420)
     static let lockScreenMusicAlbumParallaxEnabled = Key<Bool>("lockScreenMusicAlbumParallaxEnabled", default: false)
     static let lockScreenTimerVerticalOffset = Key<Double>("lockScreenTimerVerticalOffset", default: 0)
-    static let lockScreenTimerWidgetWidth = Key<Double>("lockScreenTimerWidgetWidth", default: 420)
     static let lockScreenGlassStyle = Key<LockScreenGlassStyle>("lockScreenGlassStyle", default: .liquid)
-    static let lockScreenGlassCustomizationMode = Key<LockScreenGlassCustomizationMode>(
-        "lockScreenGlassCustomizationMode",
-        default: .standard
-    )
-    static let lockScreenTimerGlassStyle = Key<LockScreenGlassStyle>("lockScreenTimerGlassStyle", default: .frosted)
-    static let lockScreenTimerGlassCustomizationMode = Key<LockScreenGlassCustomizationMode>(
-        "lockScreenTimerGlassCustomizationMode",
-        default: .standard
-    )
-    static let lockScreenMusicLiquidGlassVariant = Key<LiquidGlassVariant>(
-        "lockScreenMusicLiquidGlassVariant",
-        default: .defaultVariant
-    )
-    static let lockScreenTimerLiquidGlassVariant = Key<LiquidGlassVariant>(
-        "lockScreenTimerLiquidGlassVariant",
-        default: .defaultVariant
-    )
     static let lockScreenShowAppIcon = Key<Bool>("lockScreenShowAppIcon", default: false)
     static let lockScreenPanelShowsBorder = Key<Bool>("lockScreenPanelShowsBorder", default: false)
     static let lockScreenPanelUsesBlur = Key<Bool>("lockScreenPanelUsesBlur", default: true)
@@ -781,15 +577,7 @@ extension Defaults.Keys {
     static let showBatteryPercentage = Key<Bool>("showBatteryPercentage", default: true)
     static let showPowerStatusIcons = Key<Bool>("showPowerStatusIcons", default: true)
     static let playLowBatteryAlertSound = Key<Bool>("playLowBatteryAlertSound", default: true)
-    
-    static let lockScreenBatteryShowsBatteryGauge = Key<Bool>(
-        "lockScreenWeatherShowsBatteryGauge",
-        default: BatteryActivityManager.shared.hasBattery()
-    )
-    static let lockScreenBatteryUsesLaptopSymbol = Key<Bool>("lockScreenWeatherBatteryUsesLaptopSymbol", default: true)
-    static let lockScreenBatteryShowsCharging = Key<Bool>("lockScreenWeatherShowsCharging", default: true)
-    static let lockScreenBatteryShowsChargingPercentage = Key<Bool>("lockScreenWeatherShowsChargingPercentage", default: true)
-    static let lockScreenBatteryShowsBluetooth = Key<Bool>("lockScreenWeatherShowsBluetooth", default: true)
+    static let showLowBatteryAlertNotifications = Key<Bool>("showLowBatteryAlertNotifications", default: false)
     
         // MARK: Downloads
     static let enableDownloadListener = Key<Bool>("enableDownloadListener", default: true)
@@ -893,21 +681,6 @@ extension Defaults.Keys {
     static let selectedAIModel = Key<AIModel?>("selectedAIModel", default: nil)
     static let enableThinkingMode = Key<Bool>("enableThinkingMode", default: false)
     static let localModelEndpoint = Key<String>("localModelEndpoint", default: "http://localhost:11434")
-
-    // MARK: Third-Party Extensions
-    static let enableThirdPartyExtensions = Key<Bool>("enableThirdPartyExtensions", default: true)
-    static let enableExtensionLiveActivities = Key<Bool>("enableExtensionLiveActivities", default: true)
-    static let enableExtensionLockScreenWidgets = Key<Bool>("enableExtensionLockScreenWidgets", default: true)
-    static let enableExtensionNotchExperiences = Key<Bool>("enableExtensionNotchExperiences", default: true)
-    static let enableExtensionNotchTabs = Key<Bool>("enableExtensionNotchTabs", default: true)
-    static let enableExtensionNotchMinimalisticOverrides = Key<Bool>("enableExtensionNotchMinimalisticOverrides", default: true)
-    static let enableExtensionNotchInteractiveWebViews = Key<Bool>("enableExtensionNotchInteractiveWebViews", default: true)
-    static let extensionAuthorizationEntries = Key<[ExtensionAuthorizationEntry]>("extensionAuthorizationEntries", default: [])
-    static let extensionRateLimitRecords = Key<[ExtensionRateLimitRecord]>("extensionRateLimitRecords", default: [])
-    static let extensionDiagnosticsLoggingEnabled = Key<Bool>("extensionDiagnosticsLoggingEnabled", default: true)
-    static let extensionLiveActivityCapacity = Key<Int>("extensionLiveActivityCapacity", default: 4)
-    static let extensionLockScreenWidgetCapacity = Key<Int>("extensionLockScreenWidgetCapacity", default: 4)
-    static let extensionNotchExperienceCapacity = Key<Int>("extensionNotchExperienceCapacity", default: 2)
     
     // MARK: Keyboard Shortcuts
     static let enableShortcuts = Key<Bool>("enableShortcuts", default: true)
@@ -918,7 +691,6 @@ extension Defaults.Keys {
     static let enableBrightnessHUD = Key<Bool>("enableBrightnessHUD", default: true)
     static let enableKeyboardBacklightHUD = Key<Bool>("enableKeyboardBacklightHUD", default: true)
     static let systemHUDSensitivity = Key<Int>("systemHUDSensitivity", default: 5)
-    static let playVolumeChangeFeedback = Key<Bool>("playVolumeChangeFeedback", default: false)
     
     // MARK: Custom OSD Window Feature
     static let enableCustomOSD = Key<Bool>("enableCustomOSD", default: false)
@@ -966,13 +738,6 @@ extension Defaults.Keys {
     // MARK: Lock Screen Features
     static let enableLockScreenLiveActivity = Key<Bool>("enableLockScreenLiveActivity", default: true)
     static let enableLockSounds = Key<Bool>("enableLockSounds", default: true)
-    
-    // MARK: Caps Lock Indicator
-    static let enableCapsLockIndicator = Key<Bool>("enableCapsLockIndicator", default: true)
-    static let capsLockIndicatorUseGreenColor = Key<Bool>("capsLockIndicatorUseGreenColor", default: false) // Legacy toggle
-    static let capsLockIndicatorTintMode = Key<CapsLockIndicatorTintMode>("capsLockIndicatorTintMode", default: .white)
-    static let didMigrateCapsLockTintMode = Key<Bool>("didMigrateCapsLockTintMode", default: false)
-    static let showCapsLockLabel = Key<Bool>("showCapsLockLabel", default: true)
     
     // MARK: ImageService
     static let didClearLegacyURLCacheV1 = Key<Bool>("didClearLegacyURLCacheV1", default: false)
@@ -1022,14 +787,6 @@ extension Defaults.Keys {
         }
 
         normalizeMusicAuxControls()
-    }
-
-    static func migrateCapsLockTintMode() {
-        guard Defaults[.didMigrateCapsLockTintMode] == false else { return }
-
-        let legacyGreen = Defaults[.capsLockIndicatorUseGreenColor]
-        Defaults[.capsLockIndicatorTintMode] = legacyGreen ? .green : .white
-        Defaults[.didMigrateCapsLockTintMode] = true
     }
 
     static func migrateMusicControlSlots() {
