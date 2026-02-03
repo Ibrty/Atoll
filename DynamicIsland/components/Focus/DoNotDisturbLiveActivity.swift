@@ -1,20 +1,10 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  DoNotDisturbLiveActivity.swift
+//  DynamicIsland
+//
+//  Renders the closed-notch Focus indicator with per-mode colours and
+//  an icon-first layout that collapses gracefully when Focus ends.
+//
 
 import AppKit
 import Defaults
@@ -23,8 +13,10 @@ import SwiftUI
 struct DoNotDisturbLiveActivity: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject var manager = DoNotDisturbManager.shared
+    @ObservedObject private var lockScreenManager = LockScreenManager.shared
     @Default(.showDoNotDisturbLabel) private var showLabelSetting
     @Default(.focusIndicatorNonPersistent) private var focusToastMode
+    @Default(.enableLockScreenLiveActivity) private var lockScreenLiveActivityEnabled
 
     @State private var isExpanded = false
     @State private var showInactiveIcon = false
@@ -32,10 +24,17 @@ struct DoNotDisturbLiveActivity: View {
     @State private var scaleResetTask: Task<Void, Never>?
     @State private var collapseTask: Task<Void, Never>?
     @State private var cleanupTask: Task<Void, Never>?
+    @State private var lockScreenDelayTask: Task<Void, Never>?
 
     private enum ToastTiming {
         static let activeDisplay: UInt64 = 1800  // focus enabled toast linger
         static let inactiveDisplay: UInt64 = 1500  // focus disabled toast linger
+    }
+
+    private enum LockScreenTiming {
+        // Give the lock/unlock overlay enough time to finish its unlock collapse
+        // before the Focus live activity expands.
+        static let unlockDelay: UInt64 = 1250
     }
 
     var body: some View {
@@ -169,6 +168,13 @@ struct DoNotDisturbLiveActivity: View {
 
     private var focusLabelBaselineWidth: CGFloat {
         FocusLabelMetrics.baselineWidth
+    }
+
+    private var shouldDelayFocusExpansionForUnlock: Bool {
+        // Only delay when the lock screen live activity feature is enabled,
+        // we’re in the middle of the unlock sequence, and Focus is about to animate in.
+        // Heuristic: the lock overlay is not idle yet and the device is not locked.
+        lockScreenLiveActivityEnabled && !lockScreenManager.isLocked && !lockScreenManager.isLockIdle
     }
 
     // MARK: - Focus metadata
@@ -322,11 +328,26 @@ struct DoNotDisturbLiveActivity: View {
 
     private func handleInitialState() {
         if manager.isDoNotDisturbActive {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                isExpanded = true
-            }
-            if focusToastMode {
-                scheduleTransientCollapse()
+            lockScreenDelayTask?.cancel()
+
+            if shouldDelayFocusExpansionForUnlock {
+                lockScreenDelayTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(LockScreenTiming.unlockDelay))
+                    guard manager.isDoNotDisturbActive else { return }
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        isExpanded = true
+                    }
+                    if focusToastMode {
+                        scheduleTransientCollapse()
+                    }
+                }
+            } else {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    isExpanded = true
+                }
+                if focusToastMode {
+                    scheduleTransientCollapse()
+                }
             }
         }
     }
@@ -337,12 +358,27 @@ struct DoNotDisturbLiveActivity: View {
             withAnimation(.smooth(duration: 0.2)) {
                 showInactiveIcon = false
             }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                iconScale = 1.0
-                isExpanded = true
+
+            lockScreenDelayTask?.cancel()
+
+            let expandNow = {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    iconScale = 1.0
+                    isExpanded = true
+                }
+                if focusToastMode {
+                    scheduleTransientCollapse()
+                }
             }
-            if focusToastMode {
-                scheduleTransientCollapse()
+
+            if shouldDelayFocusExpansionForUnlock {
+                lockScreenDelayTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(LockScreenTiming.unlockDelay))
+                    guard manager.isDoNotDisturbActive else { return }
+                    expandNow()
+                }
+            } else {
+                expandNow()
             }
         } else {
             triggerInactiveAnimation()
@@ -415,9 +451,11 @@ struct DoNotDisturbLiveActivity: View {
         scaleResetTask?.cancel()
         collapseTask?.cancel()
         cleanupTask?.cancel()
+        lockScreenDelayTask?.cancel()
         scaleResetTask = nil
         collapseTask = nil
         cleanupTask = nil
+        lockScreenDelayTask = nil
     }
 }
 

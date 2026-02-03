@@ -1,20 +1,10 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  DoNotDisturbManager.swift
+//  DynamicIsland
+//
+//  Replaces the legacy polling-based Focus detection with
+//  NSDistributedNotificationCenter-backed monitoring.
+//
 
 import AppKit
 import Combine
@@ -107,6 +97,22 @@ final class DoNotDisturbManager: ObservableObject {
             let trimmedIdentifier = identifier?.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
 
+            // ✅ If this is a disable/enable toggle event but we didn't get metadata,
+            // do NOT clobber the last known focus mode name/identifier.
+            // Just toggle the active flag.
+            let hasIdentifier = (trimmedIdentifier?.isEmpty == false)
+            let hasName = (trimmedName?.isEmpty == false)
+
+            if let isActive = isActive, !hasIdentifier && !hasName {
+                let shouldToggleActive = (isActive != self.isDoNotDisturbActive)
+                guard shouldToggleActive else { return }
+
+                withAnimation(.smooth(duration: 0.25)) {
+                    self.isDoNotDisturbActive = isActive
+                }
+                return
+            }
+
             let resolvedMode = FocusModeType.resolve(identifier: trimmedIdentifier, name: trimmedName)
 
             let finalIdentifier: String
@@ -143,7 +149,7 @@ final class DoNotDisturbManager: ObservableObject {
                 self.currentFocusModeName = finalName
                     .localizedCaseInsensitiveContains(
                         "Reduce Interruptions"
-                    ) ? "Reduce Interr." : finalName
+                    ) ? "Reduce Interruptions" : finalName
             }
 
             if identifierChanged || nameChanged || shouldToggleActive {
@@ -335,7 +341,7 @@ enum FocusModeType: String, CaseIterable {
         case .gaming: return "Gaming"
         case .mindfulness: return "Mindfulness"
         case .reading: return "Reading"
-        case .reduceInterruptions: return "Reduce Interr."
+        case .reduceInterruptions: return "Reduce Interruptions"
         case .custom: return "Focus"
         case .unknown: return "Focus Mode"
         }
@@ -417,7 +423,9 @@ enum FocusModeType: String, CaseIterable {
     var inactiveSymbol: String {
         switch self {
         case .doNotDisturb:
-            return "moon.circle.fill"
+            return "moon.fill"
+        case .custom:
+            return getCustomIconFromFile()
         default:
             return sfSymbol
         }
