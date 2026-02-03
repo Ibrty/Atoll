@@ -1,20 +1,9 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  LockScreenLiveActivity.swift
+//  DynamicIsland
+//
+//  Created for lock screen live activity
+//
 
 import SwiftUI
 import Defaults
@@ -22,6 +11,7 @@ import Defaults
 struct LockScreenLiveActivity: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject private var lockScreenManager = LockScreenManager.shared
+    @ObservedObject private var focusManager = DoNotDisturbManager.shared
     @StateObject private var iconAnimator = LockIconAnimator(initiallyLocked: LockScreenManager.shared.isLocked)
     @State private var isHovering: Bool = false
     @State private var gestureProgress: CGFloat = 0
@@ -42,6 +32,31 @@ struct LockScreenLiveActivity: View {
     private var indicatorDimension: CGFloat {
         max(0, vm.effectiveClosedNotchHeight - 12)
     }
+
+    private var shouldShowFocusIcon: Bool {
+        focusManager.isDoNotDisturbActive
+    }
+
+    private var focusMode: FocusModeType {
+        FocusModeType.resolve(
+            identifier: focusManager.currentFocusModeIdentifier,
+            name: focusManager.currentFocusModeName
+        )
+    }
+
+    private var focusIcon: Image {
+        focusMode
+            .resolvedActiveIcon(usePrivateSymbol: true)
+            .renderingMode(.template)
+    }
+
+    private var focusIconView: some View {
+        focusIcon
+            .font(.system(size: max(14, indicatorDimension * 0.78), weight: .semibold))
+            .frame(width: indicatorDimension, height: indicatorDimension)
+            .foregroundStyle(iconColor)
+            .accessibilityLabel("Focus")
+    }
     
     var body: some View {
         HStack(spacing: 0) {
@@ -60,9 +75,17 @@ struct LockScreenLiveActivity: View {
                 .fill(.black)
                 .frame(width: vm.closedNotchSize.width + (isHovering ? 8 : 0))
             
-            // Right - Empty for symmetry with animation
+            // Right - Focus icon when active (keeps the wing for symmetry with animation)
             Color.clear
-                .frame(width: isExpanded ? max(0, vm.effectiveClosedNotchHeight - (isHovering ? 0 : 12) + gestureProgress / 2) : 0, height: vm.effectiveClosedNotchHeight - (isHovering ? 0 : 12))
+                .overlay(alignment: .trailing) {
+                    if isExpanded && shouldShowFocusIcon {
+                        focusIconView
+                    }
+                }
+                .frame(
+                    width: isExpanded ? max(0, vm.effectiveClosedNotchHeight - (isHovering ? 0 : 12) + gestureProgress / 2) : 0,
+                    height: vm.effectiveClosedNotchHeight - (isHovering ? 0 : 12)
+                )
         }
         .frame(height: vm.effectiveClosedNotchHeight + (isHovering ? 8 : 0))
         .onAppear {

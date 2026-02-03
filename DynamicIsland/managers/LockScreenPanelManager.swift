@@ -1,27 +1,15 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  LockScreenPanelManager.swift
+//  DynamicIsland
+//
+//  Manages the lock screen music panel window.
+//
 
 import SwiftUI
 import AppKit
 import SkyLightWindow
 import Defaults
 import QuartzCore
-import Combine
 
 @MainActor
 final class LockScreenPanelAnimator: ObservableObject {
@@ -44,12 +32,10 @@ class LockScreenPanelManager {
     private var hideTask: Task<Void, Never>?
     private var screenChangeObserver: NSObjectProtocol?
     private var workspaceObservers: [NSObjectProtocol] = []
-    private var cancellables = Set<AnyCancellable>()
 
     private init() {
         print("[\(timestamp())] LockScreenPanelManager: initialized")
         registerScreenChangeObservers()
-        observeDefaultChanges()
     }
 
     private func timestamp() -> String {
@@ -88,7 +74,7 @@ class LockScreenPanelManager {
             return
         }
 
-        guard let screen = currentScreen() else {
+        guard let screen = NSScreen.main else {
             print("[\(timestamp())] LockScreenPanelManager: no main screen available")
             return
         }
@@ -132,9 +118,8 @@ class LockScreenPanelManager {
         panelAnimator.isPresented = false
         LockScreenTimerWidgetManager.shared.notifyMusicPanelFrameChanged(animated: false)
 
-    let hosting = NSHostingView(rootView: LockScreenMusicPanel(animator: panelAnimator))
-    hosting.frame = NSRect(origin: .zero, size: targetFrame.size)
-    hosting.autoresizingMask = [.width, .height]
+        let hosting = NSHostingView(rootView: LockScreenMusicPanel(animator: panelAnimator))
+        hosting.frame = NSRect(origin: .zero, size: targetFrame.size)
         window.contentView = hosting
 
         // Ensure the underlying window content is clipped to rounded corners
@@ -203,7 +188,7 @@ class LockScreenPanelManager {
     }
 
     func applyOffsetAdjustment(animated: Bool = true) {
-        guard let screen = currentScreen() else { return }
+        guard let screen = NSScreen.main else { return }
         let screenFrame = screen.frame
         let newCollapsed = collapsedFrame(for: screenFrame)
         collapsedFrame = newCollapsed
@@ -240,7 +225,7 @@ class LockScreenPanelManager {
     private func handleScreenGeometryChange(reason: String) {
         guard let window = panelWindow else { return }
         guard window.isVisible || panelAnimator.isPresented else { return }
-        guard let screen = currentScreen() else { return }
+        guard let screen = NSScreen.main else { return }
 
         let screenFrame = screen.frame
         collapsedFrame = collapsedFrame(for: screenFrame)
@@ -248,15 +233,6 @@ class LockScreenPanelManager {
         LockScreenTimerWidgetManager.shared.notifyMusicPanelFrameChanged(animated: false)
 
         print("[\(timestamp())] LockScreenPanelManager: realigned window due to \(reason)")
-    }
-
-    private func observeDefaultChanges() {
-        Defaults.publisher(.lockScreenMusicPanelWidth)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.applyOffsetAdjustment(animated: true)
-            }
-            .store(in: &cancellables)
     }
 
     private func collapsedFrame(for screenFrame: NSRect) -> NSRect {
@@ -269,8 +245,5 @@ class LockScreenPanelManager {
         let originY = baseOriginY + defaultLowering + clampedOffset
         return NSRect(x: originX, y: originY, width: collapsedSize.width, height: collapsedSize.height)
     }
-
-    private func currentScreen() -> NSScreen? {
-        LockScreenDisplayContextProvider.shared.contextSnapshot()?.screen ?? NSScreen.main
-    }
 }
+

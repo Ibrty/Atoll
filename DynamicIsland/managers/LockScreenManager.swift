@@ -1,20 +1,10 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  LockScreenManager.swift
+//  DynamicIsland
+//
+//  Created for lock screen detection feature
+//  Monitors system lock/unlock events and provides real-time status updates
+//
 
 import Foundation
 import Combine
@@ -97,7 +87,6 @@ class LockScreenManager: ObservableObject {
         print("[\(timestamp())] LockScreenManager: 🔒 Screen LOCKED event received")
         Logger.log("LockScreenManager: Screen locked", category: .lifecycle)
         LockSoundPlayer.shared.playLockChime()
-        LockScreenDisplayContextProvider.shared.refresh(reason: "screen-locked")
         
         // Update state SYNCHRONOUSLY without Task/await to avoid any delay
         lastUpdated = Date()
@@ -145,7 +134,6 @@ class LockScreenManager: ObservableObject {
         print("[\(timestamp())] LockScreenManager: 🔓 Screen UNLOCKED event received")
         Logger.log("LockScreenManager: Screen unlocked", category: .lifecycle)
         LockSoundPlayer.shared.playUnlockChime()
-        LockScreenDisplayContextProvider.shared.refresh(reason: "screen-unlocked")
         lastUpdated = Date()
         updateIdleState(locked: false)
         isLocked = false
