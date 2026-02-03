@@ -1,27 +1,70 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * Originally from boring.notch project
- * Modified and adapted for Atoll (DynamicIsland)
- * See NOTICE for details.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  InlineHUDs.swift
+//  DynamicIsland
+//
+//  Created by Richard Kunkli on 14/09/2024.
+//
 
 import SwiftUI
+import AppKit
+import AVFoundation
 import Defaults
+
+// MARK: - Inline HUD looping .mov icon
+
+private final class LoopingPlayerController {
+    let player: AVQueuePlayer
+    private var looper: AVPlayerLooper?
+
+    init(url: URL) {
+        let item = AVPlayerItem(url: url)
+        self.player = AVQueuePlayer()
+        self.player.isMuted = true
+        self.player.actionAtItemEnd = .none
+        self.looper = AVPlayerLooper(player: self.player, templateItem: item)
+        self.player.play()
+    }
+
+    deinit {
+        player.pause()
+        looper = nil
+    }
+}
+
+private struct LoopingVideoIcon: NSViewRepresentable {
+    let url: URL
+    let size: CGSize
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: NSRect(origin: .zero, size: size))
+        view.wantsLayer = true
+
+        let layer = AVPlayerLayer()
+        layer.videoGravity = .resizeAspect
+        layer.frame = view.bounds
+
+        view.layer?.addSublayer(layer)
+
+        context.coordinator.attach(layer: layer, url: url)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // No-op; the animation loops via AVPlayerLooper.
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        private var controller: LoopingPlayerController?
+
+        func attach(layer: AVPlayerLayer, url: URL) {
+            controller = LoopingPlayerController(url: url)
+            layer.player = controller?.player
+        }
+    }
+}
+
 
 struct InlineHUD: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
@@ -40,8 +83,6 @@ struct InlineHUD: View {
     @Default(.showBluetoothBatteryPercentageText) var showBluetoothBatteryPercentageText
     @Default(.showBluetoothDeviceNameMarquee) var showBluetoothDeviceNameMarquee
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
-    @Default(.showCapsLockLabel) var showCapsLockLabel
-    @Default(.capsLockIndicatorTintMode) var capsLockTintMode
     @ObservedObject var bluetoothManager = BluetoothAudioManager.shared
     
     @State private var displayName: String = ""
@@ -49,93 +90,107 @@ struct InlineHUD: View {
     var body: some View {
         let useCircularIndicator = useCircularBluetoothBatteryIndicator
         let hasBatteryLevel = value > 0
-        let capsLockAccentColor = capsLockTintMode.color
+        let leftIconWidth: CGFloat = 20
+        let leftIconToTextSpacing: CGFloat = 5
 
+        // Dynamically size the left/info area for Bluetooth device names so they don't get cut off.
+        // When marquee is enabled, we use the measured text width to compute a natural container width.
         let baseInfoWidth: CGFloat = {
-            if type == .bluetoothAudio {
-                if showBluetoothDeviceNameMarquee {
-                    return enableMinimalisticUI ? 128 : 140
-                }
-                return enableMinimalisticUI ? 64 : 72
+            guard type == .bluetoothAudio else { return 100 }
+
+            // If we are showing the device name (marquee toggle), allow the container to expand to fit it.
+            if showBluetoothDeviceNameMarquee {
+                let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+                let measuredNameWidth = measureTextWidth(displayName, font: nameFont)
+
+                // Icon + spacing + name + breathing room + small safety buffer to avoid accidental marquee.
+                let padding: CGFloat = enableMinimalisticUI ? 12 : 16
+                let safetyBuffer: CGFloat = 10
+                return leftIconWidth + leftIconToTextSpacing + measuredNameWidth + padding + safetyBuffer
             }
 
-            if type == .capsLock && !showCapsLockLabel {
-                return enableMinimalisticUI ? 56 : 64
-            }
-
-            return 100
+            // Original compact widths when we are NOT showing the device name.
+            return enableMinimalisticUI ? 64 : 72
         }()
 
         let infoWidth: CGFloat = {
             var width = baseInfoWidth + gestureProgress / 2
             if !hoverAnimation { width -= 8 }
+
+            // Preserve the old minimum widths so the HUD doesn't collapse too much.
             let minimum: CGFloat = {
-                if type == .bluetoothAudio {
-                    if showBluetoothDeviceNameMarquee {
-                        return enableMinimalisticUI ? 112 : 120
-                    }
-                    return enableMinimalisticUI ? 56 : 68
+                guard type == .bluetoothAudio else { return 88 }
+                if showBluetoothDeviceNameMarquee {
+                    return enableMinimalisticUI ? 112 : 120
                 }
-
-                if type == .capsLock && !showCapsLockLabel {
-                    return enableMinimalisticUI ? 44 : 52
-                }
-
-                return 88
+                return enableMinimalisticUI ? 56 : 68
             }()
+
             return max(width, minimum)
         }()
 
         let baseTrailingWidth: CGFloat = {
-            if type == .bluetoothAudio {
-                if !hasBatteryLevel {
-                    return showBluetoothDeviceNameMarquee ? (enableMinimalisticUI ? 104 : 118) : (enableMinimalisticUI ? 74 : 88)
-                }
-
-                if useCircularIndicator {
-                    return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 108 : 120) : (enableMinimalisticUI ? 72 : 84)
-                }
-
-                return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 118 : 136) : (enableMinimalisticUI ? 92 : 108)
+            guard type == .bluetoothAudio else { return 100 }
+            if !hasBatteryLevel {
+                return showBluetoothDeviceNameMarquee ? (enableMinimalisticUI ? 104 : 118) : (enableMinimalisticUI ? 74 : 88)
             }
 
-            if type == .capsLock {
-                if showCapsLockLabel {
-                    return enableMinimalisticUI ? 84 : 96
-                }
-                return 0
+            if useCircularIndicator {
+                return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 108 : 120) : (enableMinimalisticUI ? 72 : 84)
             }
 
-            return 100
+            return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 118 : 136) : (enableMinimalisticUI ? 92 : 108)
         }()
 
         let trailingWidth: CGFloat = {
+            // For Bluetooth battery display (linear OR circular), keep both wings balanced so
+            // the indicator always has a consistent distance from the popup's right edge.
+            if type == .bluetoothAudio, hasBatteryLevel {
+                return infoWidth
+            }
+
             var width = baseTrailingWidth + gestureProgress / 2
             if !hoverAnimation { width -= 8 }
             let minimum: CGFloat = {
-                if type == .bluetoothAudio {
-                    if !hasBatteryLevel {
-                        return showBluetoothDeviceNameMarquee ? (enableMinimalisticUI ? 96 : 110) : (enableMinimalisticUI ? 62 : 88)
-                    }
-
-                    if useCircularIndicator {
-                        return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 92 : 110) : (enableMinimalisticUI ? 56 : 72)
-                    }
-
-                    return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 104 : 120) : (enableMinimalisticUI ? 72 : 90)
+                guard type == .bluetoothAudio else { return 90 }
+                if !hasBatteryLevel {
+                    return showBluetoothDeviceNameMarquee ? (enableMinimalisticUI ? 96 : 110) : (enableMinimalisticUI ? 62 : 88)
                 }
 
-                if type == .capsLock {
-                    return showCapsLockLabel ? (enableMinimalisticUI ? 68 : 80) : 0
+                if useCircularIndicator {
+                    return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 92 : 110) : (enableMinimalisticUI ? 56 : 72)
                 }
 
-                return 90
+                return showBluetoothBatteryPercentageText ? (enableMinimalisticUI ? 104 : 120) : (enableMinimalisticUI ? 72 : 90)
             }()
             return max(width, minimum)
         }()
 
-        return HStack {
-            HStack(spacing: 5) {
+        let totalHUDWidth: CGFloat = {
+            // For Bluetooth notifications we intentionally size the overall HUD as:
+            // (2 * left wing width) + notch width, so both wings have equal space around the notch.
+            if type == .bluetoothAudio {
+                return (2 * infoWidth) + vm.closedNotchSize.width
+            }
+
+            // For other HUD types, fall back to the natural combined width.
+            return infoWidth + trailingWidth + vm.closedNotchSize.width
+        }()
+
+        let wingHeight: CGFloat = vm.closedNotchSize.height - (hoverAnimation ? 0 : 12)
+        let outerHeight: CGFloat = vm.closedNotchSize.height + (hoverAnimation ? 8 : 0)
+        let centerX: CGFloat = totalHUDWidth / 2
+        let centerY: CGFloat = outerHeight / 2
+
+        return ZStack {
+            // Center notch spacer (visual + layout reference)
+            Rectangle()
+                .fill(.black)
+                .frame(width: vm.closedNotchSize.width, height: wingHeight)
+                .position(x: centerX, y: centerY)
+
+            // LEFT WING: anchored so its trailing edge sits at the left edge of the notch
+            HStack(spacing: leftIconToTextSpacing) {
                 Group {
                     switch (type) {
                         case .volume:
@@ -173,36 +228,51 @@ struct InlineHUD: View {
                                 .contentTransition(.interpolate)
                                 .frame(width: 20, height: 15, alignment: .center)
                         case .bluetoothAudio:
-                            Image(systemName: icon.isEmpty ? "bluetooth" : icon)
-                                .symbolRenderingMode(.hierarchical)
-                                .contentTransition(.interpolate)
-                                .frame(width: 20, height: 15, alignment: .center)
-                        case .capsLock:
-                            Image(systemName: "capslock.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .contentTransition(.interpolate)
-                                .frame(width: 20, height: 15, alignment: .center)
-                                .foregroundStyle(capsLockAccentColor)
+                            if let deviceType = bluetoothManager.lastConnectedDevice?.deviceType,
+                               let url = Bundle.main.url(forResource: deviceType.inlineHUDAnimationBaseName, withExtension: "mov") {
+                                LoopingVideoIcon(url: url, size: CGSize(width: 20, height: 20))
+                                    .frame(width: 20, height: 20, alignment: .center)
+                            } else {
+                                Image(systemName: icon.isEmpty ? "bluetooth" : icon)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .contentTransition(.interpolate)
+                                    .frame(width: 20, height: 15, alignment: .center)
+                            }
                         default:
                             EmptyView()
                     }
                 }
                 .foregroundStyle(.white)
                 .symbolVariant(.fill)
-                
+
                 // Use marquee text for device names to handle long names
                 if type == .bluetoothAudio {
                     if showBluetoothDeviceNameMarquee {
-                        MarqueeText(
-                            $displayName,
-                            font: .system(size: 13, weight: .medium),
-                            nsFont: .body,
-                            textColor: .white,
-                            minDuration: 0.2,
-                            frameWidth: infoWidth
-                        )
+                        let marqueeWidth = max(60, infoWidth - leftIconWidth - leftIconToTextSpacing)
+                        let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+                        let measuredNameWidth = measureTextWidth(displayName, font: nameFont)
+
+                        if measuredNameWidth <= marqueeWidth {
+                            Text(displayName)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .allowsTightening(true)
+                                .frame(width: marqueeWidth, alignment: .leading)
+                        } else {
+                            MarqueeText(
+                                $displayName,
+                                font: .system(size: 13, weight: .medium),
+                                nsFont: .body,
+                                textColor: .white,
+                                minDuration: 0.2,
+                                frameWidth: marqueeWidth
+                            )
+                            .frame(width: marqueeWidth, alignment: .leading)
+                            .clipped()
+                        }
                     }
-                } else if type != .capsLock {
+                } else {
                     Text(Type2Name(type))
                         .font(.subheadline)
                         .fontWeight(.medium)
@@ -212,12 +282,13 @@ struct InlineHUD: View {
                         .foregroundStyle(.white)
                 }
             }
-            .frame(width: infoWidth, height: vm.notchSize.height - (hoverAnimation ? 0 : 12), alignment: .leading)
-            
-            Rectangle()
-                .fill(.black)
-                .frame(width: vm.closedNotchSize.width - 20)
-            
+            .frame(width: infoWidth, height: wingHeight, alignment: .leading)
+            .position(
+                x: centerX - (vm.closedNotchSize.width / 2) - (infoWidth / 2),
+                y: centerY
+            )
+
+            // RIGHT WING: anchored so its leading edge sits at the right edge of the notch
             HStack {
                 if (type == .mic) {
                     Text(value.isZero ? "muted" : "unmuted")
@@ -235,18 +306,6 @@ struct InlineHUD: View {
                         .multilineTextAlignment(.trailing)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .contentTransition(.interpolate)
-                } else if (type == .capsLock) {
-                    if showCapsLockLabel {
-                        Text("Caps Lock")
-                            .foregroundStyle(capsLockAccentColor)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .lineLimit(1)
-                            .allowsTightening(true)
-                            .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .contentTransition(.interpolate)
-                    }
                 } else if (type == .bluetoothAudio) {
                     if hasBatteryLevel {
                         let indicatorSpacing: CGFloat = {
@@ -258,6 +317,7 @@ struct InlineHUD: View {
 
                         HStack(spacing: indicatorSpacing) {
                             if useCircularIndicator {
+                                // Keep circular HUD behavior unchanged.
                                 CircularBatteryIndicator(
                                     value: value,
                                     useColorCoding: useColorCodedBatteryDisplay && progressBarStyle != .segmented,
@@ -265,10 +325,27 @@ struct InlineHUD: View {
                                 )
                                 .allowsHitTesting(false)
                             } else {
+                                // Make the linear battery track expand/contract to fill the right wing.
+                                let percentString = "\(Int(value * 100))%"
+                                let percentFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+                                let percentWidth: CGFloat = showBluetoothBatteryPercentageText
+                                    ? measureTextWidth(percentString, font: percentFont)
+                                    : 0
+
+                                // Available space for the linear track inside the trailing wing.
+                                // Subtract percentage text width and spacing when the percentage is visible.
+                                let reservedSpacing: CGFloat = showBluetoothBatteryPercentageText ? indicatorSpacing : 0
+                                let horizontalBreathingRoom: CGFloat = 10
+                                let availableTrackWidth = max(
+                                    28,
+                                    trailingWidth - percentWidth - reservedSpacing - horizontalBreathingRoom
+                                )
+
                                 LinearBatteryIndicator(
                                     value: value,
                                     useColorCoding: useColorCodedBatteryDisplay && progressBarStyle != .segmented,
-                                    smoothGradient: useSmoothColorGradient
+                                    smoothGradient: useSmoothColorGradient,
+                                    trackWidth: availableTrackWidth
                                 )
                                 .allowsHitTesting(false)
                             }
@@ -316,10 +393,14 @@ struct InlineHUD: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-            .padding(.trailing, trailingWidth > 0 ? 4 : 0)
-            .frame(width: trailingWidth, height: vm.closedNotchSize.height - (hoverAnimation ? 0 : 12), alignment: .center)
+            .padding(.trailing, (type == .bluetoothAudio && hasBatteryLevel) ? 6 : (trailingWidth > 0 ? 4 : 0))
+            .frame(width: trailingWidth, height: wingHeight, alignment: .center)
+            .position(
+                x: centerX + (vm.closedNotchSize.width / 2) + (trailingWidth / 2),
+                y: centerY
+            )
         }
-        .frame(height: vm.closedNotchSize.height + (hoverAnimation ? 8 : 0), alignment: .center)
+        .frame(width: totalHUDWidth, height: outerHeight, alignment: .center)
         .onAppear {
             displayName = Type2Name(type)
         }
@@ -329,8 +410,18 @@ struct InlineHUD: View {
         .onChange(of: bluetoothManager.lastConnectedDevice?.name) { _, _ in
             displayName = Type2Name(type)
         }
+        .onChange(of: bluetoothManager.lastConnectedDevice?.deviceType) { _, _ in
+            displayName = Type2Name(type)
+        }
     }
     
+    private func measureTextWidth(_ text: String, font: NSFont) -> CGFloat {
+        // Measure using AppKit so we can size the left HUD area to fit the device name.
+        // This avoids truncation when "show device name" is enabled.
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        return (text as NSString).size(withAttributes: attributes).width.rounded(.up)
+    }
+
     private struct CircularBatteryIndicator: View {
         let value: CGFloat
         let useColorCoding: Bool
@@ -366,9 +457,21 @@ struct InlineHUD: View {
         let value: CGFloat
         let useColorCoding: Bool
         let smoothGradient: Bool
+        let trackWidth: CGFloat
 
-        private let trackWidth: CGFloat = 54
         private let trackHeight: CGFloat = 6
+
+        init(
+            value: CGFloat,
+            useColorCoding: Bool,
+            smoothGradient: Bool,
+            trackWidth: CGFloat = 54
+        ) {
+            self.value = value
+            self.useColorCoding = useColorCoding
+            self.smoothGradient = smoothGradient
+            self.trackWidth = trackWidth
+        }
 
         private var clampedValue: CGFloat {
             min(max(value, 0), 1)
@@ -441,8 +544,6 @@ struct InlineHUD: View {
                 return "Mic"
             case .bluetoothAudio:
                 return BluetoothAudioManager.shared.lastConnectedDevice?.name ?? "Bluetooth"
-            case .capsLock:
-                return "Caps Lock"
             default:
                 return ""
         }

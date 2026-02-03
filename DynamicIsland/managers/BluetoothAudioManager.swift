@@ -1,20 +1,10 @@
-/*
- * Atoll (DynamicIsland)
- * Copyright (C) 2024-2026 Atoll Contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
+//
+//  BluetoothAudioManager.swift
+//  DynamicIsland
+//
+//  Created for Bluetooth audio device connection detection and monitoring
+//  Detects when audio devices connect and displays HUD with battery status
+//
 
 import Foundation
 import Combine
@@ -39,7 +29,7 @@ class BluetoothAudioManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let coordinator = DynamicIslandViewCoordinator.shared
     private var pollingTimer: Timer?
-    private let bluetoothPreferencesSuite = "/Library/Preferences/com.apple.Bluetooth"
+    private let bluetoothPreferencesSuite = "com.apple.Bluetooth"
     private let batteryReader = BluetoothLEBatteryReader()
     private var isLiveBatteryRefreshInFlight = false
 
@@ -57,6 +47,21 @@ class BluetoothAudioManager: ObservableObject {
     private var hudBatteryWaitTasks: [UUID: Task<Void, Never>] = [:]
     private let hudBatteryWaitInterval: TimeInterval = 0.3
     private let hudBatteryWaitTimeout: TimeInterval = 1.8
+    
+    fileprivate struct AirPodsSides: Equatable {
+            var left: Int?
+            var right: Int?
+            var caseLevel: Int?
+            var leftConnected: Bool?
+            var rightConnected: Bool?
+        }
+
+        @Published fileprivate var airPodsSidesByName: [String: AirPodsSides] = [:]
+
+        fileprivate enum AirPodSide {
+            case left
+            case right
+        }
     
     // MARK: - Initialization
     private init() {
@@ -397,34 +402,310 @@ class BluetoothAudioManager: ObservableObject {
         return nil
     }
     
+    // MARK: - AirPods PID-based detection
+
+    /// Known Apple vendor ID
+    private let appleVendorID: UInt16 = 0x05AC
+
+    /// Map of Bluetooth Product IDs (PID) -> AirPods device type
+    /// Fill in / extend this table as needed.
+    private let devicePIDMap: [UInt16: BluetoothAudioDeviceType] = [
+        0x2002: .airpods,  //Gen 1 Airpods
+        0x200F: .airpods,  //Gen 2 Airpods
+        0x2013: .airpodsGen3, //Gen 3 Airpods
+        0x2019: .airpodsGen4, //Gen 4 Airpods
+        0x201B: .airpodsGen4, //Gen 4 Airpods ANC
+        0x200A: .airpodsMax, //Airpods Max Lightning
+        0x201F: .airpodsMax,  // Airpods Max USB-C
+        0x200E: .airpodsPro, // Airpods Pro Gen 1
+        0x2014: .airpodsPro, // Airpods Pro Gen 2 Lightning
+        0x2024: .airpodsPro, // Airpods Pro Gen 2 USB-C
+        0x2027: .airpodsPro3, // Airpods Pro Gen 3
+        0x2017: .beatsstudio, //Beats Studio Pro
+        0x2009: .beatsstudio, //Beats Studio 3
+        0x2006: .beatssolo, // Beats Solo 3
+        0x200C: .beatssolo //Beats Solo Pro
+    ]
+
+
+    /// Extract a UInt16 from common payload formats (Int/NSNumber/String including hex like "0x201B").
+    private func extractUInt16(from payload: [String: Any], keys: [String]) -> UInt16? {
+        for key in keys {
+            guard let raw = payload[key] else { continue }
+
+            if let n = raw as? NSNumber {
+                return UInt16(truncatingIfNeeded: n.uint16Value)
+            }
+            if let i = raw as? Int {
+                return UInt16(truncatingIfNeeded: i)
+            }
+            if let s = raw as? String {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if trimmed.hasPrefix("0x") {
+                    let hex = trimmed.dropFirst(2)
+                    if let v = UInt16(hex, radix: 16) { return v }
+                } else if let v = UInt16(trimmed, radix: 10) {
+                    return v
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Recursively searches nested dictionaries/arrays for the first UInt16 value whose key matches `predicate`.
+    private func deepSearchUInt16(in value: Any, predicate: (String) -> Bool) -> UInt16? {
+        if let dict = value as? [String: Any] {
+            // 1) direct keys
+            for (k, v) in dict {
+                if predicate(k) {
+                    if let found = extractUInt16(from: dict, keys: [k]) {
+                        return found
+                    }
+                    // if the value itself is numeric/string, try parsing it directly
+                    if let n = v as? NSNumber { return UInt16(truncatingIfNeeded: n.uint16Value) }
+                    if let i = v as? Int { return UInt16(truncatingIfNeeded: i) }
+                    if let s = v as? String {
+                        let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if t.hasPrefix("0x"), let v16 = UInt16(t.dropFirst(2), radix: 16) { return v16 }
+                        if let v16 = UInt16(t, radix: 10) { return v16 }
+                    }
+                }
+            }
+            // 2) recurse
+            for v in dict.values {
+                if let found = deepSearchUInt16(in: v, predicate: predicate) { return found }
+            }
+            return nil
+        } else if let arr = value as? [Any] {
+            for v in arr {
+                if let found = deepSearchUInt16(in: v, predicate: predicate) { return found }
+            }
+            return nil
+        }
+        return nil
+    }
+
+    /// Fallback: attempt to get VendorID/ProductID from system_profiler SPBluetoothDataType -json.
+    /// NOTE: `device_connected` is an array of dictionaries like `{ "<Device Name>": { ...payload... } }`.
+    private func vendorProductIDsFromSystemProfiler(forNormalizedAddress target: String) -> (vendor: UInt16, product: UInt16)? {
+        guard !target.isEmpty else { return nil }
+        guard let root = systemProfilerBluetoothDictionary() else { return nil }
+
+        
+        guard let deviceConnected = root["device_connected"] as? [Any] else { return nil }
+
+        func pidFromPayload(_ payload: [String: Any]) -> UInt16? {
+            // system_profiler uses "device_productID" string like "0x2027"
+            if let raw = payload["device_productID"] as? String {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if trimmed.hasPrefix("0x"), let v = UInt16(trimmed.dropFirst(2), radix: 16) { return v }
+                if let v = UInt16(trimmed, radix: 16) { return v }
+            }
+            // fallback to our generic extractors
+            let productKeys = ["device_productID", "ProductID", "product_id", "productID", "DeviceProductID", "ProductId", "Product ID"]
+            return extractUInt16(from: payload, keys: productKeys)
+                ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("productid") }
+        }
+
+        func vidFromPayload(_ payload: [String: Any]) -> UInt16? {
+            let vendorKeys = ["device_vendorID", "VendorID", "vendor_id", "vendorID", "DeviceVendorID", "VendorId", "Vendor ID"]
+            return extractUInt16(from: payload, keys: vendorKeys)
+                ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("vendorid") }
+        }
+
+        // 1) Prefer exact match by address
+        for item in deviceConnected {
+            guard let d = item as? [String: Any], let n = d.keys.first, let infoAny = d[n], let payload = infoAny as? [String: Any] else {
+                continue
+            }
+
+            // Match by address-like fields inside payload (system_profiler commonly includes "device_address")
+            if let addr = payload["device_address"] as? String {
+                if normalizeBluetoothIdentifier(addr) != target { continue }
+            } else {
+                // If there is no address in payload, try any other address candidates we know about
+                let candidates = profilerAddressCandidates(from: payload).map(normalizeBluetoothIdentifier)
+                if !candidates.contains(target) { continue }
+            }
+
+            if let pid = pidFromPayload(payload) {
+                if let vid = vidFromPayload(payload) {
+                    return (vendor: vid, product: pid)
+                }
+                if devicePIDMap[pid] != nil {
+                    return (vendor: appleVendorID, product: pid)
+                }
+            }
+        }
+
+        // 2) Secondary fallback: if address wasn't present in payload, match by normalized name,
+        // but only return if we find exactly one AirPods PID match.
+        // This avoids accidentally mapping the wrong device when multiple AirPods are connected.
+        var nameMatches: [(UInt16, UInt16?)] = []
+        for item in deviceConnected {
+            guard let d = item as? [String: Any], let n = d.keys.first, let infoAny = d[n], let payload = infoAny as? [String: Any] else {
+                continue
+            }
+            // Only consider AirPods-like devices
+            let normName = normalizeProductName(n)
+            guard normName.contains("airpods") else { continue }
+
+            if let pid = pidFromPayload(payload), devicePIDMap[pid] != nil {
+                nameMatches.append((pid, vidFromPayload(payload)))
+            }
+        }
+
+        if nameMatches.count == 1 {
+            let (pid, vid) = nameMatches[0]
+            return (vendor: vid ?? appleVendorID, product: pid)
+        }
+
+        return nil
+    }
+
+    /// Attempts to find VendorID/ProductID for a device using the Bluetooth preference caches.
+    private func vendorProductIDs(for device: IOBluetoothDevice) -> (vendor: UInt16, product: UInt16)? {
+        guard let preferences = UserDefaults(suiteName: bluetoothPreferencesSuite),
+              let deviceCache = preferences.object(forKey: "DeviceCache") as? [String: Any] else {
+            return nil
+        }
+
+        let target = normalizeBluetoothIdentifier(device.addressString ?? "")
+        guard !target.isEmpty else { return nil }
+
+        let vendorKeys = [
+            "VendorID", "vendor_id", "vendorID",
+            "device_vendorID", "DeviceVendorID", "device_vendor_id",
+            "device_vendorId", "DeviceVendorId",
+            "VendorId", "Vendor ID",
+            "VendorIDSource", "VendorIDSourceLocal", "VendorIDSourceRemote"
+        ]
+        let productKeys = [
+            "ProductID", "product_id", "productID",
+            "device_productID", "DeviceProductID", "device_product_id",
+            "device_productId", "DeviceProductId",
+            "ProductId", "Product ID",
+            "ProductIDSource", "ProductIDSourceLocal", "ProductIDSourceRemote"
+        ]
+
+        for (key, value) in deviceCache {
+            guard let payload = value as? [String: Any] else { continue }
+            if matchesBluetoothIdentifier(target, key: key, payload: payload) {
+                let vid = extractUInt16(from: payload, keys: vendorKeys)
+                    ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("vendorid") }
+
+                let pid = extractUInt16(from: payload, keys: productKeys)
+                    ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("productid") }
+
+                if let pid {
+                    if let vid {
+                        return (vendor: vid, product: pid)
+                    }
+                    if devicePIDMap[pid] != nil {
+                        return (vendor: appleVendorID, product: pid)
+                    }
+                }
+            }
+        }
+
+        // Fallback: try CoreBluetoothCache entries (sometimes contains VendorID/ProductID even when DeviceCache doesn't)
+        if let coreCache = preferences.object(forKey: "CoreBluetoothCache") as? [String: [String: Any]] {
+            for payload in coreCache.values {
+                // Match by address if present
+                if let addrAny = payload["DeviceAddress"] ?? payload["Address"] ?? payload["BD_ADDR"] ?? payload["device_address"],
+                   let addr = normalizeBluetoothIdentifier(from: addrAny),
+                   addr == target {
+                    let vid = extractUInt16(from: payload, keys: vendorKeys)
+                        ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("vendorid") }
+
+                    let pid = extractUInt16(from: payload, keys: productKeys)
+                        ?? deepSearchUInt16(in: payload) { $0.lowercased().contains("productid") }
+
+                    if let pid {
+                        if let vid {
+                            return (vendor: vid, product: pid)
+                        }
+                        if devicePIDMap[pid] != nil {
+                            return (vendor: appleVendorID, product: pid)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Final fallback: system_profiler (often has vendor/product IDs even when caches don't)
+        if let fromProfiler = vendorProductIDsFromSystemProfiler(forNormalizedAddress: target) {
+            return fromProfiler
+        }
+
+        return nil
+    }
+
+    /// Attempts to detect AirPods type using vendor/product IDs.
+    /// Returns nil if PID-based detection fails.
+    private func airPodsTypeFromPID(_ device: IOBluetoothDevice) -> BluetoothAudioDeviceType? {
+        // 1) PRIMARY (AirBattery-style): system_profiler -> device_productID
+        if let pid = airBatteryStyleProductIDFromSystemProfiler(for: device) {
+            return devicePIDMap[pid]
+        }
+
+        // 2) Secondary: your existing cache-based vendor/product logic (if you still want it)
+        if let ids = vendorProductIDs(for: device) {
+            return devicePIDMap[ids.product]
+        }
+
+        return nil
+    }
+
     /// Detects the type of audio device based on name and properties
     private func detectDeviceType(from device: IOBluetoothDevice, name: String) -> BluetoothAudioDeviceType {
         let lowercaseName = name.lowercased()
-        
-        // Check for specific AirPods models
+
+        // 1) PRIMARY: PID-based AirPods detection (name-independent)
+        if let pidBasedType = airPodsTypeFromPID(device) {
+            return pidBasedType
+        }
+        print("[Atoll][AirPods PID] PID lookup FAILED, falling back to name for:", name, "addr:", device.addressString ?? "nil")
+
+        // 2) FALLBACK: name-based AirPods detection (for renamed devices or unknown PIDs)
         if lowercaseName.contains("airpods") {
             if lowercaseName.contains("max") {
                 return .airpodsMax
             } else if lowercaseName.contains("pro") {
                 return .airpodsPro
+            } else if lowercaseName.contains("gen 4")
+                        || lowercaseName.contains("gen4")
+                        || lowercaseName.contains("4th")
+                        || lowercaseName.contains("airpods 4")
+                        || lowercaseName.contains("airpods4")
+                        || lowercaseName.contains("4") {
+                return .airpodsGen4
+            } else if lowercaseName.contains("gen 3")
+                        || lowercaseName.contains("gen3")
+                        || lowercaseName.contains("3rd")
+                        || lowercaseName.contains("third")
+                        || lowercaseName.contains("airpods 3")
+                        || lowercaseName.contains("airpods3")
+                        || lowercaseName.contains("3") {
+                return .airpodsGen3
             }
             return .airpods
         }
-        
+
         // Check for other brands
         if lowercaseName.contains("beats") {
-            return .beats
+            return .beatssolo
         } else if lowercaseName.contains("speaker") || lowercaseName.contains("boombox") {
             return .speaker
-        } else if lowercaseName.contains("headphone") || lowercaseName.contains("headset") || 
+        } else if lowercaseName.contains("headphone") || lowercaseName.contains("headset") ||
                   lowercaseName.contains("buds") || lowercaseName.contains("earbuds") {
             return .headphones
         }
-        
+
         // Check device class for more specific detection
         let deviceClass = device.classOfDevice
         let minorClass = (deviceClass >> 2) & 0x3F
-        
+
         // Minor classes for audio devices
         switch minorClass {
         case 0x01: return .headphones  // Wearable Headset
@@ -510,8 +791,10 @@ class BluetoothAudioManager: ObservableObject {
         guard !entries.isEmpty else { return }
 
         var updatedNames = batteryStatusByName
-        let newlyFilled = mergePmsetEntries(entries, into: &updatedNames, logNewEntries: true)
-        guard !newlyFilled.isEmpty else { return }
+        _ = mergePmsetEntries(entries, into: &updatedNames, logNewEntries: true)
+
+        // ✅ Apply if anything changed
+        guard updatedNames != batteryStatusByName else { return }
 
         batteryStatusByName = updatedNames
         applyConnectedDeviceBatteryLevels(triggerPmsetFallback: false)
@@ -520,6 +803,7 @@ class BluetoothAudioManager: ObservableObject {
             updateActiveBluetoothHUDBattery(with: level)
         }
     }
+
 
     private func triggerLiveBatteryRefreshIfNeeded() {
         guard !connectedDevices.isEmpty else { return }
@@ -710,18 +994,31 @@ class BluetoothAudioManager: ObservableObject {
 
         var newlyFilled: [PmsetAccessoryBatteryEntry] = []
 
+        func upsert(_ key: String, _ level: Int) {
+            guard !key.isEmpty else { return }
+            let prev = names[key]
+            if prev == nil {
+                names[key] = level
+            } else if let prev, level > prev {
+                names[key] = level
+            }
+        }
+
         for entry in entries {
             let clamped = clampBatteryPercentage(entry.level)
-            let previous = names[entry.normalizedName]
 
-            if previous == nil {
-                newlyFilled.append(entry)
-                names[entry.normalizedName] = clamped
-                continue
+            // 1) store full normalized name (current behavior)
+            if names[entry.normalizedName] == nil { newlyFilled.append(entry) }
+            upsert(entry.normalizedName, clamped)
+
+            // 2) ALSO store a “product-only” alias starting at airpods/beats if present
+            if let r = entry.normalizedName.range(of: "beats") {
+                let alias = String(entry.normalizedName[r.lowerBound...]) // e.g. "beatsstudiopro"
+                upsert(alias, clamped)
             }
-
-            if let previous, clamped > previous {
-                names[entry.normalizedName] = clamped
+            if let r = entry.normalizedName.range(of: "airpods") {
+                let alias = String(entry.normalizedName[r.lowerBound...]) // e.g. "airpodspro"
+                upsert(alias, clamped)
             }
         }
 
@@ -733,6 +1030,7 @@ class BluetoothAudioManager: ObservableObject {
 
         return newlyFilled
     }
+
 
     private func batteryLevelFromDefaults(forAddress address: String?) -> Int? {
         guard let address, !address.isEmpty else { return nil }
@@ -796,6 +1094,7 @@ class BluetoothAudioManager: ObservableObject {
 
         var combinedAddressPercentages: [String: Int] = [:]
         var combinedNamePercentages: [String: Int] = [:]
+        var combinedAirPodsSidesByName: [String: AirPodsSides] = [:]
 
         let registry = collectRegistryBatteryLevels()
         mergeBatteryLevels(into: &combinedAddressPercentages, from: registry.addresses)
@@ -808,6 +1107,13 @@ class BluetoothAudioManager: ObservableObject {
         let profiler = collectSystemProfilerBatteryLevels()
         mergeBatteryLevels(into: &combinedAddressPercentages, from: profiler.addresses)
         mergeBatteryLevels(into: &combinedNamePercentages, from: profiler.names)
+        
+        let profilerSides = collectSystemProfilerAirPodsSides()
+        mergeAirPodsSides(into: &combinedAirPodsSidesByName, from: profilerSides)
+
+        let defaultsSides = collectDefaultsAirPodsSides()
+        mergeAirPodsSides(into: &combinedAirPodsSidesByName, from: defaultsSides)
+
 
         let pmsetEntries = collectPmsetAccessoryBatteryEntries()
         mergePmsetEntries(pmsetEntries, into: &combinedNamePercentages, logNewEntries: true)
@@ -821,6 +1127,7 @@ class BluetoothAudioManager: ObservableObject {
             self.batteryStatus = statuses
             self.batteryStatusByAddress = combinedAddressPercentages
             self.batteryStatusByName = combinedNamePercentages
+            self.airPodsSidesByName = combinedAirPodsSidesByName
             self.lastBatteryStatusUpdate = now
         }
 
@@ -842,6 +1149,265 @@ class BluetoothAudioManager: ObservableObject {
             }
         }
     }
+    
+    private func mergeAirPodsSides(into target: inout [String: AirPodsSides], from source: [String: AirPodsSides]) {
+            guard !source.isEmpty else { return }
+
+            for (key, value) in source {
+                guard !key.isEmpty else { continue }
+                var current = target[key] ?? AirPodsSides(left: nil, right: nil, caseLevel: nil, leftConnected: nil, rightConnected: nil)
+
+                if let left = value.left {
+                    current.left = max(current.left ?? left, left)
+                }
+                if let right = value.right {
+                    current.right = max(current.right ?? right, right)
+                }
+                if let caseLevel = value.caseLevel {
+                    current.caseLevel = max(current.caseLevel ?? caseLevel, caseLevel)
+                }
+                if let lc = value.leftConnected {
+                    current.leftConnected = current.leftConnected ?? lc
+                }
+                if let rc = value.rightConnected {
+                    current.rightConnected = current.rightConnected ?? rc
+                }
+
+                target[key] = current
+            }
+        }
+
+        private func collectSystemProfilerAirPodsSides() -> [String: AirPodsSides] {
+            guard let root = systemProfilerBluetoothDictionary() else { return [:] }
+
+            var result: [String: AirPodsSides] = [:]
+
+            if let connectedList = root["device_connected"] as? [[String: [String: Any]]] {
+                for deviceGroup in connectedList {
+                    for (rawName, payload) in deviceGroup {
+                        let normalizedName = normalizeProductName(rawName)
+                        guard normalizedName.contains("airpods") else { continue }
+
+                        let sides = extractAirPodsSides(from: payload)
+                        if sides.left != nil || sides.right != nil {
+                            result[normalizedName] = AirPodsSides(
+                                left: sides.left.map(clampBatteryPercentage),
+                                right: sides.right.map(clampBatteryPercentage),
+                                caseLevel: sides.caseLevel.map(clampBatteryPercentage),
+                                leftConnected: sides.leftConnected,
+                                rightConnected: sides.rightConnected
+                            )
+                        }
+                    }
+                }
+            }
+
+            return result
+        }
+
+        private func collectDefaultsAirPodsSides() -> [String: AirPodsSides] {
+            guard let preferences = UserDefaults(suiteName: bluetoothPreferencesSuite),
+                  let deviceCache = preferences.object(forKey: "DeviceCache") as? [String: Any] else {
+                return [:]
+            }
+
+            var result: [String: AirPodsSides] = [:]
+
+            for value in deviceCache.values {
+                guard let payload = value as? [String: Any] else { continue }
+                let rawName = (payload["Name"] as? String) ?? (payload["DeviceName"] as? String) ?? ""
+                let normalizedName = normalizeProductName(rawName)
+                guard normalizedName.contains("airpods") else { continue }
+
+                let sides = extractAirPodsSides(from: payload)
+                if sides.left != nil || sides.right != nil {
+                    result[normalizedName] = AirPodsSides(
+                        left: sides.left.map(clampBatteryPercentage),
+                        right: sides.right.map(clampBatteryPercentage),
+                        caseLevel: sides.caseLevel.map(clampBatteryPercentage),
+                        leftConnected: sides.leftConnected,
+                        rightConnected: sides.rightConnected
+                    )
+                }
+            }
+
+            return result
+        }
+
+        private func extractAirPodsSides(from payload: [String: Any]) -> AirPodsSides {
+            // Try the most common keys we see across DeviceCache + system_profiler.
+            let leftKeys = [
+                "BatteryPercentLeft",
+                "device_batteryLevelLeft",
+                "device_batteryPercentLeft",
+                "Left Battery Level",
+                "LeftBatteryLevel",
+                "BatteryLevelLeft",
+                "BatteryLeft"
+            ]
+
+            let rightKeys = [
+                "BatteryPercentRight",
+                "device_batteryLevelRight",
+                "device_batteryPercentRight",
+                "Right Battery Level",
+                "RightBatteryLevel",
+                "BatteryLevelRight",
+                "BatteryRight"
+            ]
+            
+            let caseKeys = [
+                "BatteryPercentCase",
+                "device_batteryLevelCase",
+                "device_batteryPercentCase",
+                "Case Battery Level",
+                "CaseBatteryLevel",
+                "BatteryLevelCase",
+                "BatteryCase",
+                "CaseBattery",
+                // extra variants
+                "BatteryPercentChargeCase",
+                "ChargeCaseBattery",
+                "ChargeCaseBatteryLevel",
+                "Charging Case Battery Level",
+                "ChargingCaseBatteryLevel",
+                "chargingCaseBatteryLevel",
+                "charging_case_battery_level"
+            ]
+
+            func firstValue(in keys: [String]) -> Int? {
+                for key in keys {
+                    if let raw = payload[key], let converted = convertToBatteryPercentage(raw) {
+                        return converted
+                    }
+                }
+                return nil
+            }
+
+            // 1) Primary lookup using known keys
+            var left = firstValue(in: leftKeys)
+            var right = firstValue(in: rightKeys)
+            var caseLevel = firstValue(in: caseKeys)
+
+            // 2) Fallback: scan every key/value in the payload for anything that looks like left/right battery.
+            if left == nil || right == nil || caseLevel == nil {
+                for (key, raw) in payload {
+                    let k = key.lowercased()
+
+                    // only consider keys that look battery-related
+                    if !(k.contains("batt") || k.contains("battery") || k.contains("percent") || k.contains("level")) {
+                        continue
+                    }
+
+                    if left == nil, k.contains("left") {
+                        if let converted = convertToBatteryPercentage(raw) {
+                            left = converted
+                        }
+                    }
+
+                    if right == nil, k.contains("right") {
+                        if let converted = convertToBatteryPercentage(raw) {
+                            right = converted
+                        }
+                    }
+                    
+                    if caseLevel == nil, (k.contains("case") || k.contains("chargingcase") || k.contains("chargecase")) {
+                        if let converted = convertToBatteryPercentage(raw) {
+                            caseLevel = converted
+                        }
+                    }
+
+                    if left != nil && right != nil && caseLevel != nil { break }
+                }
+            }
+
+            let connections = extractAirPodsConnections(from: payload)
+            return AirPodsSides(
+                left: left,
+                right: right,
+                caseLevel: caseLevel,
+                leftConnected: connections.left,
+                rightConnected: connections.right
+            )
+        }
+
+        // Helper to extract per-side connected flags for AirPods
+        private func extractAirPodsConnections(from payload: [String: Any]) -> (left: Bool?, right: Bool?) {
+            // Common/likely keys across system_profiler + DeviceCache variants
+            let leftKeys = [
+                "device_connectedLeft",
+                "device_isConnectedLeft",
+                "DeviceConnectedLeft",
+                "LeftConnected",
+                "leftConnected",
+                "left_connected",
+                // Expanded keys for left
+                "device_inEarLeft",
+                "device_inEarDetectedLeft",
+                "InEarLeft",
+                "LeftInEar",
+                "leftInEar",
+                "left_in_ear",
+                "device_wornLeft",
+                "LeftWorn",
+                "leftWorn"
+            ]
+
+            let rightKeys = [
+                "device_connectedRight",
+                "device_isConnectedRight",
+                "DeviceConnectedRight",
+                "RightConnected",
+                "rightConnected",
+                "right_connected",
+                // Expanded keys for right
+                "device_inEarRight",
+                "device_inEarDetectedRight",
+                "InEarRight",
+                "RightInEar",
+                "rightInEar",
+                "right_in_ear",
+                "device_wornRight",
+                "RightWorn",
+                "rightWorn"
+            ]
+
+            func toBool(_ raw: Any) -> Bool? {
+                if let b = raw as? Bool { return b }
+                if let n = raw as? Int { return n != 0 }
+                if let n = raw as? NSNumber { return n.intValue != 0 }
+                if let s = raw as? String {
+                    let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if ["1","true","yes","y","connected"].contains(t) { return true }
+                    if ["0","false","no","n","disconnected"].contains(t) { return false }
+                }
+                return nil
+            }
+
+            func firstBool(in keys: [String]) -> Bool? {
+                for k in keys {
+                    if let raw = payload[k], let b = toBool(raw) {
+                        return b
+                    }
+                }
+                return nil
+            }
+
+            // Fallback scan: look for any battery-ish key that also contains left/right + connect/inear/in_ear/worn
+            func scan(side: String) -> Bool? {
+                for (key, raw) in payload {
+                    let k = key.lowercased()
+                    guard k.contains(side) else { continue }
+                    guard k.contains("connect") || k.contains("inear") || k.contains("in_ear") || k.contains("worn") else { continue }
+                    if let b = toBool(raw) { return b }
+                }
+                return nil
+            }
+
+            let left = firstBool(in: leftKeys) ?? scan(side: "left")
+            let right = firstBool(in: rightKeys) ?? scan(side: "right")
+            return (left, right)
+        }
 
     private func collectRegistryBatteryLevels() -> (addresses: [String: Int], names: [String: Int]) {
         var addressPercentages: [String: Int] = [:]
@@ -996,44 +1562,62 @@ class BluetoothAudioManager: ObservableObject {
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        guard process.terminationStatus == 0 else {
-            return []
-        }
+        guard process.terminationStatus == 0 else { return [] }
+        guard !data.isEmpty else { return [] }
 
-        guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
-            return []
-        }
+        // pmset output may not be UTF-8 inside a GUI app; fall back to common encodings
+        let output =
+            String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .macOSRoman)
+            ?? String(data: data, encoding: .isoLatin1)
 
-        guard let regex = try? NSRegularExpression(
-            pattern: #"^\s*-\s*(.+?)\s*(?:\(.+?\))?\s+(\d+)\s*%"#,
-            options: [.anchorsMatchLines]
-        ) else {
+        guard let output else { return [] }
+
+        // Parse any line that starts with '-' and contains a "<number>%"
+        guard let percentRegex = try? NSRegularExpression(pattern: #"(\d+)\s*%"#, options: []) else {
             return []
         }
 
         var entries: [PmsetAccessoryBatteryEntry] = []
-        let nsOutput = output as NSString
-        let range = NSRange(location: 0, length: nsOutput.length)
 
-        regex.enumerateMatches(in: output, options: [], range: range) { match, _, _ in
-            guard let match, match.numberOfRanges >= 3 else { return }
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("-") else { continue }
 
-            let rawName = nsOutput
-                .substring(with: match.range(at: 1))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let percentString = nsOutput.substring(with: match.range(at: 2))
+            // Remove leading '-'
+            line.removeFirst()
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            guard !rawName.isEmpty, let level = Int(percentString) else { return }
+            let nsLine = line as NSString
+            let fullRange = NSRange(location: 0, length: nsLine.length)
 
-            let normalizedName = normalizeProductName(rawName)
-            guard !normalizedName.isEmpty else { return }
-            if normalizedName.hasPrefix("internalbattery") {
-                return
+            guard let match = percentRegex.firstMatch(in: line, options: [], range: fullRange),
+                  match.numberOfRanges >= 2 else {
+                continue
             }
+
+            let percentString = nsLine.substring(with: match.range(at: 1))
+            guard let level = Int(percentString) else { continue }
+
+            // Name = everything before the percent match; strip trailing "(id=...)" if present
+            var namePart = nsLine.substring(to: match.range.location)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            namePart = namePart.replacingOccurrences(
+                of: #"\s*\([^)]*\)\s*$"#,
+                with: "",
+                options: .regularExpression
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !namePart.isEmpty else { continue }
+
+            let normalizedName = normalizeProductName(namePart)
+            guard !normalizedName.isEmpty else { continue }
+            if normalizedName.hasPrefix("internalbattery") { continue }
 
             entries.append(
                 PmsetAccessoryBatteryEntry(
-                    displayName: rawName,
+                    displayName: namePart,
                     normalizedName: normalizedName,
                     level: level
                 )
@@ -1042,6 +1626,7 @@ class BluetoothAudioManager: ObservableObject {
 
         return entries
     }
+
 
     private func identifiersFromDeviceCachePayload(_ payload: [String: Any]) -> [String] {
         var identifiers: Set<String> = []
@@ -1097,6 +1682,47 @@ class BluetoothAudioManager: ObservableObject {
 
         return root
     }
+    
+    /// AirBattery-style: read ProductID directly from system_profiler SPBluetoothDataType JSON.
+    /// Returns the PID as UInt16 if found (hex string like "0x2027").
+    private func airBatteryStyleProductIDFromSystemProfiler(for device: IOBluetoothDevice) -> UInt16? {
+        let target = normalizeBluetoothIdentifier(device.addressString ?? "")
+        guard !target.isEmpty else { return nil }
+
+        guard
+            let jsonObject = systemProfilerBluetoothDictionary(),
+            let deviceConnected = jsonObject["device_connected"] as? [Any]
+        else { return nil }
+
+        for entry in deviceConnected {
+            guard let dict = entry as? [String: Any],
+                  let nameKey = dict.keys.first,
+                  let info = dict[nameKey] as? [String: Any]
+            else { continue }
+
+            // Match address
+            if let addr = info["device_address"] as? String {
+                if normalizeBluetoothIdentifier(addr) != target { continue }
+            } else {
+                continue
+            }
+
+            // Read PID like AirBattery does
+            if let pidString = info["device_productID"] as? String {
+                let cleaned = pidString
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                    .replacingOccurrences(of: "0x", with: "")
+
+                if let pid = UInt16(cleaned, radix: 16) {
+                    print("[Atoll][AirPods PID] system_profiler matched addr=\(device.addressString ?? "nil") pid=\(pidString)")
+                    return pid
+                }
+            }
+        }
+
+        return nil
+    }
 
     private func extractSystemProfilerBatteryPercentage(from payload: [String: Any]) -> Int? {
         let preferredKeys = [
@@ -1138,6 +1764,14 @@ class BluetoothAudioManager: ObservableObject {
         let keys = [
             "device_address",
             "device_mac_address",
+            "device_bdaddr",
+            "device_bd_addr",
+            "bd_addr",
+            "BD_ADDR",
+            "DeviceAddress",
+            "Address",
+            "Device Address",
+            "device_address_string",
             "device_serial_num",
             "device_serialNumber",
             "device_serial_number"
@@ -1216,7 +1850,10 @@ class BluetoothAudioManager: ObservableObject {
             return number
         }
         if let number = value as? Double {
-            if number <= 1.0 {
+            // Some sources report battery as a fraction (0.0–1.0). Others report percent (0–100).
+            // Treat ONLY strict fractions (< 1.0) as fractions. A value of 1.0 is ambiguous and
+            // previously caused real 1% readings (sometimes serialized as 1.0) to display as 100%.
+            if number > 0.0 && number < 1.0 {
                 return Int(number * 100)
             }
             return Int(number)
@@ -1224,7 +1861,7 @@ class BluetoothAudioManager: ObservableObject {
         if let string = value as? String {
             let trimmed = string.replacingOccurrences(of: "%", with: "")
             if let doubleValue = Double(trimmed) {
-                if doubleValue <= 1.0 {
+                if doubleValue > 0.0 && doubleValue < 1.0 {
                     return Int(doubleValue * 100)
                 }
                 return Int(doubleValue)
@@ -1372,6 +2009,242 @@ class BluetoothAudioManager: ObservableObject {
 
         return components.joined()
     }
+    
+    struct WidgetBluetoothDevice: Identifiable, Equatable {
+            let id: String
+            let symbolName: String
+            let batteryLevel: Int?
+        }
+
+        func widgetBluetoothDevices() -> [WidgetBluetoothDevice] {
+            let threshold = 5
+            var output: [WidgetBluetoothDevice] = []
+
+            let appendCaseIfAvailable: (_ device: BluetoothAudioDevice, _ caseLevel: Int?) -> Void = { device, caseLevel in
+                guard Defaults[.lockScreenShowAirPodsCaseBattery] else { return }
+                guard let caseLevel else { return }
+                output.append(
+                    WidgetBluetoothDevice(
+                        id: device.address + "-C",
+                        symbolName: device.deviceType.caseSymbol(),
+                        batteryLevel: caseLevel
+                    )
+                )
+            }
+            for device in connectedDevices {
+                // Only split earbud AirPods pairs (AirPods / AirPods Pro). Keep others as-is.
+                guard device.deviceType.isEarbudAirPodsPair else {
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address,
+                            symbolName: device.deviceType.sfSymbol,
+                            batteryLevel: device.batteryLevel
+                        )
+                    )
+                    continue
+                }
+
+                let key = normalizeProductName(device.name)
+
+                // Primary lookup by exact normalized name
+                var sides = airPodsSidesByName[key]
+
+                // Fallback: some sources include the user's name in the cache key (e.g. "aidansairpodspro").
+                // If we don't find an exact match, match any cached key that ends with the product key.
+                if sides == nil {
+                    if let matchedKey = airPodsSidesByName.keys.first(where: { $0.hasSuffix(key) }) {
+                        sides = airPodsSidesByName[matchedKey]
+                    }
+                }
+
+                let left = sides?.left
+                let right = sides?.right
+                let leftConnected = sides?.leftConnected
+                let rightConnected = sides?.rightConnected
+                let caseLevel = sides?.caseLevel
+                let bothConnected = (leftConnected == true && rightConnected == true)
+                
+                print("[Atoll][AirPods] name=\(device.name) normalized=\(key) left=\(String(describing: left)) right=\(String(describing: right)) case=\(String(describing: caseLevel)) cacheKeys=\(Array(airPodsSidesByName.keys))")
+
+                // If we have no per-side info, keep current behavior.
+                guard left != nil || right != nil else {
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address,
+                            symbolName: device.deviceType.pairSymbol(),
+                            batteryLevel: device.batteryLevel
+                        )
+                    )
+                    appendCaseIfAvailable(device, caseLevel)
+                    continue
+                }
+
+                // If we have explicit connection flags, prefer them (prevents showing both when one bud is in the case).
+                if let lc = leftConnected, let rc = rightConnected, lc != rc {
+                    if lc {
+                        output.append(
+                            WidgetBluetoothDevice(
+                                id: device.address + "-L",
+                                symbolName: device.deviceType.earbudSymbol(for: .left),
+                                batteryLevel: left
+                            )
+                        )
+                    } else {
+                        output.append(
+                            WidgetBluetoothDevice(
+                                id: device.address + "-R",
+                                symbolName: device.deviceType.earbudSymbol(for: .right),
+                                batteryLevel: right
+                            )
+                        )
+                    }
+                    appendCaseIfAvailable(device, caseLevel)
+                    continue
+                }
+                
+                // Case-based inference: if the case battery matches exactly one side,
+                // that side is likely in the case → show ONLY the other bud.
+                if (leftConnected != nil || rightConnected != nil), !bothConnected, let left, let right, let caseLevel {
+                    let eps = 2
+                    let leftIsCase = abs(left - caseLevel) <= eps
+                    let rightIsCase = abs(right - caseLevel) <= eps
+
+                    if leftIsCase != rightIsCase {
+                        if leftIsCase {
+                            output.append(
+                                WidgetBluetoothDevice(
+                                    id: device.address + "-R",
+                                    symbolName: device.deviceType.earbudSymbol(for: .right),
+                                    batteryLevel: right
+                                )
+                            )
+                            appendCaseIfAvailable(device, caseLevel)
+                            continue
+                        } else {
+                            output.append(
+                                WidgetBluetoothDevice(
+                                    id: device.address + "-L",
+                                    symbolName: device.deviceType.earbudSymbol(for: .left),
+                                    batteryLevel: left
+                                )
+                            )
+                            appendCaseIfAvailable(device, caseLevel)
+                            continue
+                        }
+                    }
+                }
+
+                // Heuristic fallback (ONLY when it looks like “one bud in case, one bud in ear”):
+                // Sometimes macOS reports BOTH left/right percentages even when only one bud is connected.
+                // We only collapse to a single bud when:
+                // - left/right differ by at least `threshold`
+                // - the lower side is quite low (<= 25%), suggesting it's sitting in the case
+                // - the device overall battery closely matches the higher side (<= 2%)
+                // - and does NOT closely match the lower side
+                if (leftConnected != nil || rightConnected != nil), !bothConnected, let left, let right, let overall = device.batteryLevel {
+                    let diff = abs(left - right)
+                    let lowSide = min(left, right)
+                    let highSide = max(left, right)
+
+                    let matchesHigh = abs(highSide - overall) <= 2
+                    let matchesLow = abs(lowSide - overall) <= 2
+
+                    if diff >= threshold && lowSide <= 25 && matchesHigh && !matchesLow {
+                        if left >= right {
+                            output.append(
+                                WidgetBluetoothDevice(
+                                    id: device.address + "-L",
+                                    symbolName: device.deviceType.earbudSymbol(for: .left),
+                                    batteryLevel: left
+                                )
+                            )
+                        } else {
+                            output.append(
+                                WidgetBluetoothDevice(
+                                    id: device.address + "-R",
+                                    symbolName: device.deviceType.earbudSymbol(for: .right),
+                                    batteryLevel: right
+                                )
+                            )
+                        }
+                        appendCaseIfAvailable(device, caseLevel)
+                        continue
+                    }
+                }
+
+                // One earbud connected -> show only that side (fallback if no connection flags).
+                if let left, right == nil {
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address + "-L",
+                            symbolName: device.deviceType.earbudSymbol(for: .left),
+                            batteryLevel: left
+                        )
+                    )
+                    appendCaseIfAvailable(device, caseLevel)
+                    continue
+                }
+
+                if let right, left == nil {
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address + "-R",
+                            symbolName: device.deviceType.earbudSymbol(for: .right),
+                            batteryLevel: right
+                        )
+                    )
+                    appendCaseIfAvailable(device, caseLevel)
+                    continue
+                }
+
+                // Both connected.
+                if let left, let right {
+                    let diff = abs(left - right)
+
+                    // diff < 5% -> maintain existing behavior.
+                    if diff < threshold {
+                        output.append(
+                            WidgetBluetoothDevice(
+                                id: device.address,
+                                symbolName: device.deviceType.pairSymbol(),
+                                batteryLevel: max(left, right)
+                            )
+                        )
+                        appendCaseIfAvailable(device, caseLevel)
+                        continue
+                    }
+
+                    // diff > 5% -> show both.
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address + "-L",
+                            symbolName: device.deviceType.earbudSymbol(for: .left),
+                            batteryLevel: left
+                        )
+                    )
+                    output.append(
+                        WidgetBluetoothDevice(
+                            id: device.address + "-R",
+                            symbolName: device.deviceType.earbudSymbol(for: .right),
+                            batteryLevel: right
+                        )
+                    )
+                    appendCaseIfAvailable(device, caseLevel)
+                    continue
+                }
+
+                // Fallback.
+                output.append(
+                    WidgetBluetoothDevice(
+                        id: device.address,
+                        symbolName: device.deviceType.sfSymbol,
+                        batteryLevel: device.batteryLevel
+                    )
+                )
+            }
+
+            return output
+        }
     
     // MARK: - HUD Display
     
@@ -1770,9 +2643,13 @@ extension BluetoothAudioDevice {
 
 enum BluetoothAudioDeviceType {
     case airpods
+    case airpodsGen3
+    case airpodsGen4
     case airpodsPro
+    case airpodsPro3
     case airpodsMax
-    case beats
+    case beatsstudio
+    case beatssolo
     case headphones
     case speaker
     case generic
@@ -1781,11 +2658,19 @@ enum BluetoothAudioDeviceType {
         switch self {
         case .airpods:
             return "airpods"
+        case .airpodsGen3:
+            return "airpods.gen3"
+        case .airpodsGen4:
+            return "airpods.gen4"
         case .airpodsPro:
-            return "airpodspro"
+            return "airpods.pro"
+        case .airpodsPro3:
+            return "airpods.pro"
         case .airpodsMax:
             return "airpodsmax"
-        case .beats:
+        case .beatsstudio:
+            return "beats.headphones"
+        case .beatssolo:
             return "beats.headphones"
         case .headphones:
             return "headphones"
@@ -1799,13 +2684,132 @@ enum BluetoothAudioDeviceType {
     var displayName: String {
         switch self {
         case .airpods: return "AirPods"
+        case .airpodsGen3: return "AirPods (Gen 3)"
+        case .airpodsGen4: return "AirPods (Gen 4)"
         case .airpodsPro: return "AirPods Pro"
+        case .airpodsPro3: return "Airpods Pro 3"
         case .airpodsMax: return "AirPods Max"
-        case .beats: return "Beats"
+        case .beatsstudio: return "Beats Studio"
+        case .beatssolo: return "Beats Solo"
         case .headphones: return "Headphones"
         case .speaker: return "Speaker"
         case .generic: return "Bluetooth Device"
         }
+    }
+
+    /// Inline HUD only: base filename (no extension) for a looping .mov animation.
+    /// Naming convention: add a resource named exactly like this value + ".mov" to the app bundle.
+    /// Example: for `.airpodsPro`, add `airpodsPro.mov`.
+    var inlineHUDAnimationBaseName: String {
+        String(describing: self)
+    }
+}
+
+fileprivate extension BluetoothAudioDeviceType {
+    var isEarbudAirPodsPair: Bool {
+        self == .airpods || self == .airpodsGen3 || self == .airpodsGen4 || self == .airpodsPro || self == .airpodsPro3
+    }
+    
+    func pairSymbol() -> String {
+        // Preferred pair symbols per model (with fallbacks for OS/SF Symbols variations)
+        let candidates: [String]
+        switch self {
+        case .airpods:
+            candidates = ["airpods"]
+        case .airpodsGen3:
+            candidates = ["airpods.gen3", "airpods"]
+        case .airpodsGen4:
+            candidates = ["airpods.gen4", "airpods"]
+        case .airpodsPro:
+            candidates = ["airpods.pro", "airpodspro", "airpods"]
+        case .airpodsPro3:
+            candidates = ["airpods.pro", "airpodspro", "airpods"]
+        case .airpodsMax:
+            candidates = ["airpodsmax", "airpods.max", "headphones"]
+        default:
+            candidates = [sfSymbol]
+        }
+
+        for name in candidates {
+            if NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+                return name
+            }
+        }
+        return sfSymbol
+    }
+    
+    func caseSymbol() -> String {
+        // Exact names you requested (with fallback if symbol missing on this OS)
+        let candidates: [String]
+        switch self {
+        case .airpodsPro:
+            // AirPods Pro Gen 1 & Gen 2 → FILLED case icon
+            candidates = [
+                "airpods.pro.chargingcase.wireless.fill",
+                "airpods.chargingcase.wireless.fill"
+            ]
+
+        case .airpodsPro3:
+            // AirPods Pro Gen 3 → NON-FILLED case icon
+            candidates = [
+                "airpods.pro.chargingcase.wireless",
+                "airpods.chargingcase.wireless"
+            ]
+        case .airpodsGen3:
+            candidates = ["airpods.gen3.chargingcase.wireless.fill", "airpods.chargingcase.wireless.fill"]
+        case .airpodsGen4:
+            candidates = ["airpods.gen4.chargingcase.wireless.fill", "airpods.chargingcase.wireless.fill"]
+        case .airpods:
+            candidates = ["airpods.chargingcase.wireless.fill"]
+        default:
+            candidates = [sfSymbol]
+        }
+
+        for name in candidates {
+            if NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil {
+                return name
+            }
+        }
+        return sfSymbol
+    }
+
+    func earbudSymbol(for side: BluetoothAudioManager.AirPodSide) -> String {
+        // AirPods Max is not a left/right earbud pair.
+        guard self != .airpodsMax else { return sfSymbol }
+
+        let suffix = (side == .left) ? ".left" : ".right"
+
+        let candidate: String
+        switch self {
+        case .airpods:
+            // Base AirPods: pair icon is "airpods", individual buds are "airpod.left/right"
+            candidate = "airpod" + suffix
+        case .airpodsGen3:
+            // Gen 3: pair icon is "airpods.gen3", individual buds are "airpod.gen3.left/right"
+            candidate = "airpod.gen3" + suffix
+        case .airpodsGen4:
+            // Gen 4: pair icon is "airpods.gen4", individual buds are "airpods.gen4.left/right"
+            candidate = "airpods.gen4" + suffix
+        case .airpodsPro:
+            // Pro: pair icon is "airpods.pro", individual buds are "airpods.pro.left/right"
+            candidate = "airpods.pro" + suffix
+        case .airpodsPro3:
+            // Pro: pair icon is "airpods.pro", individual buds are "airpods.pro.left/right"
+            candidate = "airpods.pro" + suffix
+        default:
+            candidate = sfSymbol
+        }
+
+        // If the OS doesn't support this SF Symbol, fall back to the base symbol.
+        #if canImport(AppKit)
+        if NSImage(systemSymbolName: candidate, accessibilityDescription: nil) != nil {
+            return candidate
+        } else {
+            return sfSymbol
+        }
+        #else
+        return candidate
+        #endif
     }
 }
 
